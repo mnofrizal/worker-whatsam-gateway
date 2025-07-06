@@ -2,16 +2,27 @@
   "name": "worker-whatsam-gateway",
   "version": "1.0.0",
   "description": "WhatsApp Gateway Worker using Baileys",
+  "type": "module",
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "docker:build": "docker build -t whatsapp-worker:latest .",
+    "docker:run": "docker run -p 8001:8001 --env-file .env whatsapp-worker:latest",
+    "docker:compose:up": "docker-compose up -d",
+    "docker:compose:down": "docker-compose down",
+    "docker:compose:logs": "docker-compose logs -f whatsapp-worker",
+    "health": "curl -f http://localhost:8001/health || exit 1",
+    "metrics": "curl -s http://localhost:8001/metrics | jq .",
+    "clean": "rm -rf logs/* storage/sessions/*"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.0.0",
+    "@whiskeysockets/baileys": "^6.7.18",
     "axios": "^1.6.0",
+    "better-sqlite3": "^12.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.0.1",
     "express": "^4.18.2",
@@ -23,6 +34,7 @@
     "multer": "^2.0.1",
     "pg": "^8.11.0",
     "qrcode": "^1.5.3",
+    "sqlite3": "^5.1.7",
     "winston": "^3.11.0"
   },
   "devDependencies": {

@@ -32,7 +32,7 @@
 {
   "dependencies": {
     "express": "^4.18.2",
-    "@whiskeysockets/baileys": "^6.0.0",
+    "@whiskeysockets/baileys": "^6.7.18",
     "qrcode": "^1.5.3",
     "minio": "^7.1.3",
     "pg": "^8.11.0",
@@ -53,50 +53,49 @@
 
 ## 📁 Project Structure
 
-```
+````
 worker/
 ├── src/
 │   ├── controllers/
-│   │   ├── session.js          # Session CRUD operations
-│   │   ├── message.js          # Message sending/receiving
-│   │   ├── health.js           # Health check endpoint
-│   │   └── webhook.js          # Webhook notifications
+│   │   ├── session.controller.js     # Session CRUD operations
+│   │   ├── message.controller.js     # Message sending/receiving
+│   │   ├── health.controller.js      # Health check endpoint
+│   │   └── webhook.controller.js     # Webhook notifications
 │   ├── services/
-│   │   ├── baileys.js          # Baileys integration service
-│   │   ├── storage.js          # MinIO storage service
-│   │   ├── database.js         # PostgreSQL operations
-│   │   ├── redis.js            # Redis caching service
-│   │   └── worker-registry.js  # Backend registration service
+│   │   ├── baileys.service.js        # Baileys integration service
+│   │   ├── storage.service.js        # MinIO storage service
+│   │   ├── database.service.js       # PostgreSQL operations
+│   │   ├── redis.service.js          # Redis caching service
+│   │   └── worker-registry.service.js # Backend registration service
 │   ├── middleware/
-│   │   ├── auth.js             # API authentication
-│   │   ├── validation.js       # Request validation
-│   │   ├── rate-limit.js       # Rate limiting
-│   │   └── error-handler.js    # Error handling
+│   │   ├── auth.middleware.js        # API authentication
+│   │   ├── validation.middleware.js  # Request validation
+│   │   ├── rate-limit.middleware.js  # Rate limiting
+│   │   └── error-handler.middleware.js # Error handling
 │   ├── models/
-│   │   ├── session.js          # Session data model
-│   │   └── message.js          # Message data model
+│   │   ├── session.model.js          # Session data model
+│   │   └── message.model.js          # Message data model
 │   ├── utils/
-│   │   ├── logger.js           # Winston logger setup
-│   │   ├── qr-generator.js     # QR code generation
-│   │   └── helpers.js          # Utility functions
+│   │   ├── logger.js                 # Winston logger setup
+│   │   ├── qr-generator.js           # QR code generation
+│   │   └── helpers.js                # Utility functions
 │   ├── routes/
-│   │   ├── session.js          # Session routes
-│   │   ├── message.js          # Message routes
-│   │   ├── health.js           # Health routes
-│   │   └── index.js            # Route aggregator
+│   │   ├── session.routes.js         # Session routes
+│   │   ├── message.routes.js         # Message routes
+│   │   ├── health.routes.js          # Health routes
+│   │   └── index.js                  # Route aggregator
 │   ├── config/
-│   │   ├── database.js         # Database configuration
-│   │   ├── redis.js            # Redis configuration
-│   │   ├── minio.js            # MinIO configuration
-│   │   └── baileys.js          # Baileys configuration
-│   └── app.js                  # Express app setup
-├── storage/                    # Local session backup
-├── logs/                       # Application logs
-├── .env.example               # Environment variables template
-├── Dockerfile                 # Container configuration
+│   │   ├── database.config.js        # Database configuration
+│   │   ├── redis.config.js           # Redis configuration
+│   │   ├── minio.config.js           # MinIO configuration
+│   │   └── baileys.config.js         # Baileys configuration
+│   └── app.js                        # Express app setup
+├── storage/                          # Local session backup
+├── logs/                             # Application logs
+├── .env.example                      # Environment variables template
+├── Dockerfile                        # Container configuration
 ├── package.json
 └── README.md
-```
 
 ---
 
@@ -124,7 +123,7 @@ Response: {
     "qrCode": "data:image/png;base64,..."
   }
 }
-```
+````
 
 #### Get QR Code
 

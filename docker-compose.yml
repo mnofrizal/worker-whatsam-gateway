@@ -1,0 +1,92 @@
+version: "3.8"
+
+services:
+  # WhatsApp Worker - Simplified version that connects to backend infrastructure
+  whatsapp-worker:
+    build: .
+    ports:
+      - "8001:8001"
+    environment:
+      - NODE_ENV=development
+      - PORT=8001
+      - WORKER_ID=worker-dev-001
+      - WORKER_ENDPOINT=http://localhost:8001
+      - MAX_SESSIONS=10
+      - LOG_LEVEL=info
+      # Backend Integration
+      - BACKEND_URL=http://host.docker.internal:8000
+      - WORKER_AUTH_TOKEN=dev-worker-token-123
+      # Database (connect to backend's postgres)
+      - DATABASE_URL=postgresql://postgres:password@host.docker.internal:5432/whatsapp_gateway
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5432
+      - DB_NAME=whatsapp_gateway
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      # Redis (connect to backend's redis)
+      - REDIS_URL=redis://:redispassword@host.docker.internal:6379
+      - REDIS_HOST=host.docker.internal
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redispassword
+      # MinIO (connect to backend's minio)
+      - MINIO_ENDPOINT=host.docker.internal
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - MINIO_USE_SSL=false
+      # Security
+      - JWT_SECRET=dev-jwt-secret-key-change-in-production
+      - ENCRYPTION_KEY=dev-encryption-key-change-in-production
+      # CORS
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
+    volumes:
+      - worker-storage:/app/storage
+      - worker-logs:/app/logs
+    restart: unless-stopped
+    # Use host network to connect to backend services
+    network_mode: host
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  worker-storage:
+    driver: local
+  worker-logs:
+    driver: local
+# =============================================================================
+# DEVELOPMENT NOTES
+# =============================================================================
+# This simplified docker-compose.yml connects to the backend's infrastructure
+# instead of duplicating PostgreSQL, Redis, and MinIO services.
+#
+# Prerequisites:
+# 1. Backend project's docker-compose must be running first
+# 2. Backend services should be accessible on localhost ports:
+#    - PostgreSQL: localhost:5432
+#    - Redis: localhost:6379
+#    - MinIO: localhost:9000, localhost:9001
+#    - Backend API: localhost:8000
+#
+# Usage:
+# 1. Start backend infrastructure first:
+#    cd /path/to/backend-project
+#    docker-compose up -d postgres redis minio
+#
+# 2. Start backend API:
+#    cd /path/to/backend-project
+#    npm run dev
+#
+# 3. Start worker:
+#    cd /path/to/worker-project
+#    docker-compose up -d
+#    # OR run locally:
+#    npm start
+#
+# Alternative: Run worker locally without Docker
+# Just use: npm start (with proper .env configuration)
+# =============================================================================
