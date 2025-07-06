@@ -37,6 +37,9 @@ class DatabaseService {
       // Initialize schema
       await this.initializeSchema();
 
+      // Run migrations for existing databases
+      await this.runMigrations();
+
       this.initialized = true;
       logger.info("SQLite database service initialized successfully", {
         dbPath: this.dbPath,
@@ -95,6 +98,10 @@ class DatabaseService {
   }
 
   // Session-related database operations
+  async createSession(sessionData) {
+    return await this.saveSession(sessionData);
+  }
+
   async saveSession(sessionData) {
     if (!this.initialized) {
       logger.warn("Database not available, skipping session save");
@@ -394,6 +401,63 @@ class DatabaseService {
       return { success: true };
     } catch (error) {
       logger.error("Failed to initialize database schema:", error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Database migrations for existing databases
+  async runMigrations() {
+    if (!this.db) {
+      logger.warn("Database not available, skipping migrations");
+      return { success: false, reason: "Database not available" };
+    }
+
+    try {
+      logger.info("Running database migrations...");
+
+      // Migration 1: Add last_activity column if it doesn't exist
+      try {
+        const tableInfo = this.db
+          .prepare("PRAGMA table_info(worker_sessions)")
+          .all();
+        const hasLastActivity = tableInfo.some(
+          (col) => col.name === "last_activity"
+        );
+
+        if (!hasLastActivity) {
+          logger.info(
+            "Migration: Adding last_activity column to worker_sessions table"
+          );
+
+          // SQLite doesn't allow non-constant defaults in ALTER TABLE
+          // So we add the column with NULL default, then update existing rows
+          this.db.exec(
+            "ALTER TABLE worker_sessions ADD COLUMN last_activity TEXT"
+          );
+
+          // Update existing rows to set last_activity to current timestamp
+          this.db.exec(
+            "UPDATE worker_sessions SET last_activity = datetime('now') WHERE last_activity IS NULL"
+          );
+
+          logger.info("Migration: last_activity column added successfully");
+        } else {
+          logger.debug("Migration: last_activity column already exists");
+        }
+      } catch (error) {
+        logger.error("Migration failed for last_activity column:", error);
+        // Don't throw error, continue with other migrations
+      }
+
+      // Future migrations can be added here
+      // Migration 2: Add other columns or indexes
+      // Migration 3: Data transformations
+      // etc.
+
+      logger.info("Database migrations completed successfully");
+      return { success: true };
+    } catch (error) {
+      logger.error("Failed to run database migrations:", error);
       return { success: false, error: error.message };
     }
   }

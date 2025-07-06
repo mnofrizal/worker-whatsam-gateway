@@ -236,17 +236,24 @@ class WhatsAppWorker {
       // Setup routes after controllers are ready
       await this.setupRoutes();
 
-      // Start server
-      this.server = this.app.listen(this.port, () => {
-        logger.info(`WhatsApp Worker started on port ${this.port}`, {
-          workerId: this.config.server.workerId,
-          environment: this.config.server.nodeEnv,
-          maxSessions: this.config.server.maxSessions,
-          endpoint: this.config.server.workerEndpoint,
+      // Start server and wait for it to be ready
+      await new Promise((resolve, reject) => {
+        this.server = this.app.listen(this.port, (error) => {
+          if (error) {
+            reject(error);
+          } else {
+            logger.info(`WhatsApp Worker started on port ${this.port}`, {
+              workerId: this.config.server.workerId,
+              environment: this.config.server.nodeEnv,
+              maxSessions: this.config.server.maxSessions,
+              endpoint: this.config.server.workerEndpoint,
+            });
+            resolve();
+          }
         });
       });
 
-      // Register worker with backend
+      // Register worker with backend AFTER server is listening
       await this.registerWithBackend();
 
       // Setup graceful shutdown
@@ -291,11 +298,13 @@ class WhatsAppWorker {
   async registerWithBackend() {
     try {
       if (this.config.backend.url) {
-        // Worker registry service handles its own registration
-        logger.info("Worker registration handled by Worker Registry service", {
+        // Start worker registration after server is listening
+        logger.info("Starting worker registration with backend", {
           backendUrl: this.config.backend.url,
           workerId: this.config.server.workerId,
         });
+
+        await this.services.workerRegistry.startRegistration();
       } else {
         logger.warn("BACKEND_URL not configured, skipping worker registration");
       }

@@ -1,7 +1,6 @@
 import express from "express";
 import sessionRoutes from "./session.routes.js";
 import messageRoutes from "./message.routes.js";
-import healthRoutes from "./health.routes.js";
 
 const router = express.Router();
 
@@ -14,7 +13,7 @@ router.get("/", (req, res) => {
     endpoints: {
       sessions: "/api/session",
       messages: "/api/message",
-      health: "/api/health",
+      health: "/health",
     },
   });
 });
@@ -22,6 +21,5 @@ router.get("/", (req, res) => {
 // Route handlers
 router.use("/session", sessionRoutes);
 router.use("/message", messageRoutes);
-router.use("/health", healthRoutes);
 
 export default router;

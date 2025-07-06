@@ -21,6 +21,160 @@ class SessionController {
     this.workerRegistryService = workerRegistryService;
   }
 
+  async startSession(req, res) {
+    try {
+      const { sessionId, userId, sessionName } = req.body;
+
+      // Validate required fields
+      if (!sessionId || !userId) {
+        return res.status(HTTP_STATUS.BAD_REQUEST).json(
+          ApiResponse.createValidationErrorResponse([
+            { field: "sessionId", message: "sessionId is required" },
+            { field: "userId", message: "userId is required" },
+          ])
+        );
+      }
+
+      // Check if session already exists
+      const existingSession = this.baileysService.getSessionStatus(sessionId);
+
+      if (existingSession.status !== "not_found") {
+        // Session exists - check its current status
+        if (existingSession.status === SESSION_STATUS.CONNECTED) {
+          return res.status(HTTP_STATUS.OK).json(
+            ApiResponse.createSuccessResponse({
+              sessionId,
+              status: SESSION_STATUS.CONNECTED,
+              message: "Session is already connected",
+              phoneNumber: existingSession.phoneNumber,
+            })
+          );
+        }
+
+        if (
+          existingSession.status === "initializing" ||
+          existingSession.status === "qr_ready"
+        ) {
+          return res.status(HTTP_STATUS.OK).json(
+            ApiResponse.createSuccessResponse({
+              sessionId,
+              status: existingSession.status,
+              message:
+                "Session is already starting. Check QR code endpoint if needed.",
+              qrCode: existingSession.qrCode || null,
+            })
+          );
+        }
+
+        // Session exists but is disconnected/logged_out - restart it
+        logger.info(`Restarting existing session: ${sessionId}`, {
+          currentStatus: existingSession.status,
+        });
+
+        try {
+          const result = await this.baileysService.restartSession(sessionId);
+
+          // Update database status
+          if (this.databaseService.isInitialized()) {
+            await this.databaseService.updateSessionStatus(
+              sessionId,
+              "initializing"
+            );
+          }
+
+          // Notify backend about session restart
+          await this.workerRegistryService.notifyBackend(
+            "reconnecting",
+            sessionId,
+            {
+              userId,
+              sessionName,
+              status: "initializing",
+            }
+          );
+
+          logger.info("Existing session restarted successfully", {
+            sessionId,
+            userId,
+          });
+
+          return res.status(HTTP_STATUS.OK).json(
+            ApiResponse.createSuccessResponse({
+              sessionId,
+              status: SESSION_STATUS.INITIALIZING,
+              message:
+                "Existing session restarted successfully. QR code will be available shortly.",
+            })
+          );
+        } catch (error) {
+          logger.error(
+            `Failed to restart existing session ${sessionId}:`,
+            error
+          );
+          // Fall through to create new session if restart fails
+        }
+      }
+
+      // Session doesn't exist or restart failed - create new session
+      logger.info(`Creating new session: ${sessionId}`, { userId });
+
+      const result = await this.baileysService.createSession(
+        sessionId,
+        userId,
+        sessionName
+      );
+
+      // Store session metadata in database
+      if (this.databaseService.isInitialized()) {
+        await this.databaseService.createSession({
+          sessionId,
+          userId,
+          sessionName: sessionName || sessionId,
+          status: "initializing",
+          workerId: this.workerRegistryService.getWorkerId(),
+          createdAt: new Date(),
+        });
+      }
+
+      // Store session routing in Redis
+      if (this.redisService.isInitialized()) {
+        await this.redisService.setSessionRouting(
+          sessionId,
+          this.workerRegistryService.getWorkerId()
+        );
+      }
+
+      // Notify backend about session creation
+      await this.workerRegistryService.notifyBackend(
+        "session_created",
+        sessionId,
+        {
+          userId,
+          sessionName,
+          status: "initializing",
+        }
+      );
+
+      logger.info("New session created successfully", { sessionId, userId });
+
+      res.status(HTTP_STATUS.CREATED).json(
+        ApiResponse.createSuccessResponse({
+          sessionId,
+          status: SESSION_STATUS.INITIALIZING,
+          message:
+            "Session started successfully. QR code will be available shortly.",
+        })
+      );
+    } catch (error) {
+      logger.error("Error starting session:", error);
+      res
+        .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
+        .json(
+          ApiResponse.createInternalErrorResponse("Failed to start session")
+        );
+    }
+  }
+
   async createSession(req, res) {
     try {
       const { sessionId, userId, sessionName } = req.body;
@@ -331,16 +485,15 @@ class SessionController {
 
       // Log message in database
       if (this.databaseService.isInitialized()) {
-        await this.databaseService.logMessage({
+        await this.databaseService.saveMessage({
           sessionId,
           messageId: result.messageId,
           from: sessionStatus.phoneNumber,
           to: formattedTo,
-          message,
+          content: message,
           type,
-          direction: "outgoing",
           status: result.status,
-          timestamp: new Date(),
+          timestamp: new Date().toISOString(),
         });
       }
 
@@ -405,6 +558,162 @@ class SessionController {
         .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
         .json(
           ApiResponse.createInternalErrorResponse("Failed to list sessions")
+        );
+    }
+  }
+
+  async restartSession(req, res) {
+    try {
+      const { sessionId } = req.params;
+
+      // Check if session exists
+      const sessionStatus = this.baileysService.getSessionStatus(sessionId);
+      if (sessionStatus.status === "not_found") {
+        return res
+          .status(HTTP_STATUS.NOT_FOUND)
+          .json(ApiResponse.createNotFoundResponse("Session"));
+      }
+
+      // Restart session via Baileys service
+      const result = await this.baileysService.restartSession(sessionId);
+
+      // Update database status
+      if (this.databaseService.isInitialized()) {
+        await this.databaseService.updateSessionStatus(sessionId, "restarting");
+      }
+
+      // Notify backend about session restart
+      await this.workerRegistryService.notifyBackend(
+        "reconnecting",
+        sessionId,
+        {
+          status: "restarting",
+        }
+      );
+
+      logger.info("Session restarted successfully", { sessionId });
+
+      res.status(HTTP_STATUS.OK).json(
+        ApiResponse.createSuccessResponse({
+          sessionId,
+          status: SESSION_STATUS.INITIALIZING,
+          message:
+            "Session restarted successfully. QR code will be available shortly.",
+        })
+      );
+    } catch (error) {
+      logger.error("Error restarting session:", error);
+      res
+        .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
+        .json(
+          ApiResponse.createInternalErrorResponse("Failed to restart session")
+        );
+    }
+  }
+
+  async disconnectSession(req, res) {
+    try {
+      const { sessionId } = req.params;
+
+      // Check if session exists
+      const sessionStatus = this.baileysService.getSessionStatus(sessionId);
+      if (sessionStatus.status === "not_found") {
+        return res
+          .status(HTTP_STATUS.NOT_FOUND)
+          .json(ApiResponse.createNotFoundResponse("Session"));
+      }
+
+      // Disconnect session via Baileys service
+      const result = await this.baileysService.disconnectSession(sessionId);
+
+      // Update database status
+      if (this.databaseService.isInitialized()) {
+        await this.databaseService.updateSessionStatus(
+          sessionId,
+          "disconnected"
+        );
+      }
+
+      // Notify backend about session disconnect
+      await this.workerRegistryService.notifyBackend(
+        "disconnected",
+        sessionId,
+        {
+          status: "disconnected",
+        }
+      );
+
+      logger.info("Session disconnected successfully", { sessionId });
+
+      res.status(HTTP_STATUS.OK).json(
+        ApiResponse.createSuccessResponse({
+          sessionId,
+          status: SESSION_STATUS.DISCONNECTED,
+          message: "Session disconnected successfully. Session data preserved.",
+        })
+      );
+    } catch (error) {
+      logger.error("Error disconnecting session:", error);
+      res
+        .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
+        .json(
+          ApiResponse.createInternalErrorResponse(
+            "Failed to disconnect session"
+          )
+        );
+    }
+  }
+
+  async logoutSession(req, res) {
+    try {
+      const { sessionId } = req.params;
+
+      // Check if session exists
+      const sessionStatus = this.baileysService.getSessionStatus(sessionId);
+      if (sessionStatus.status === "not_found") {
+        return res
+          .status(HTTP_STATUS.NOT_FOUND)
+          .json(ApiResponse.createNotFoundResponse("Session"));
+      }
+
+      // Logout session via Baileys service (this will delete auth data)
+      const result = await this.baileysService.logoutSession(sessionId);
+
+      // Update database status
+      if (this.databaseService.isInitialized()) {
+        await this.databaseService.updateSessionStatus(sessionId, "logged_out");
+      }
+
+      // Clean up Redis QR code cache
+      if (this.redisService.isInitialized()) {
+        await this.redisService.deleteQRCode(sessionId);
+      }
+
+      // Notify backend about session logout
+      await this.workerRegistryService.notifyBackend(
+        "disconnected",
+        sessionId,
+        {
+          status: "logged_out",
+        }
+      );
+
+      logger.info("Session logged out successfully", { sessionId });
+
+      res.status(HTTP_STATUS.OK).json(
+        ApiResponse.createSuccessResponse({
+          sessionId,
+          status: SESSION_STATUS.DISCONNECTED,
+          message:
+            "Session logged out successfully. Auth data deleted, QR scan required for reconnection.",
+        })
+      );
+    } catch (error) {
+      logger.error("Error logging out session:", error);
+      res
+        .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
+        .json(
+          ApiResponse.createInternalErrorResponse("Failed to logout session")
         );
     }
   }

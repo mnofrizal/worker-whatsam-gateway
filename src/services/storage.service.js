@@ -240,6 +240,16 @@ class StorageService {
   isInitialized() {
     return this.initialized;
   }
+
+  async close() {
+    if (this.initialized && this.client) {
+      logger.info("Closing MinIO storage service...");
+      // MinIO client doesn't have a close method, just mark as not initialized
+      this.initialized = false;
+      this.client = null;
+      logger.info("MinIO storage service closed");
+    }
+  }
 }
 
 export default StorageService;

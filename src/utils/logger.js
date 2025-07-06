@@ -88,11 +88,11 @@ const logger = winston.createLogger({
     winston.format.errors({ stack: true }),
     config.logging.enableJson ? winston.format.json() : winston.format.simple()
   ),
-  defaultMeta: {
-    service: "whatsapp-worker",
-    workerId: config.server.workerId,
-    environment: config.server.nodeEnv,
-  },
+  // defaultMeta: {
+  //   service: "whatsapp-worker",
+  //   workerId: config.server.workerId,
+  //   environment: config.server.nodeEnv,
+  // },
   transports,
 });
 

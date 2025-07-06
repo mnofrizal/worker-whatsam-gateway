@@ -43,7 +43,10 @@ bower_components/
 .vscode/
 
 # Session storage
-storage/sessions/
+storage/
+storage/worker.db
+
+
 
 # Baileys auth state
 auth_info*
@@ -62,3 +65,4 @@ test-output/
 # Ignore temp files
 tmp/
 temp/
+

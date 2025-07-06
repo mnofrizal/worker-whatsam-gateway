@@ -46,17 +46,51 @@ class WorkerRegistryService {
         return;
       }
 
+      // Just initialize the service, don't register yet
+      // Registration will happen after the HTTP server is listening
+      logger.info(
+        "Worker Registry service initialized (registration deferred until server is ready)"
+      );
+    } catch (error) {
+      logger.error("Failed to initialize Worker Registry service:", error);
+      throw error;
+    }
+  }
+
+  async startRegistration() {
+    try {
+      logger.info("Starting worker registration process...");
+
+      // Check if backend registration is enabled
+      if (
+        process.env.BACKEND_REGISTRATION_ENABLED === "false" ||
+        process.env.STANDALONE_MODE === "true"
+      ) {
+        logger.info("Backend registration disabled, skipping registration");
+        return;
+      }
+
+      // Check if backend URL is configured
+      if (!this.backendUrl) {
+        logger.warn("Backend URL not configured, skipping registration");
+        return;
+      }
+
+      // Add startup delay to give backend time to be ready
+      const startupDelay = parseInt(process.env.WORKER_STARTUP_DELAY) || 5000;
+      await new Promise((resolve) => setTimeout(resolve, startupDelay));
+
       await this.registerWorkerWithRetry();
       this.initialized = true;
-      logger.info("Worker Registry service initialized successfully", {
+      logger.info("Worker registration completed successfully", {
         workerId: this.workerId,
         backendUrl: this.backendUrl,
         maxSessions: this.maxSessions,
       });
     } catch (error) {
-      logger.error("Failed to initialize Worker Registry service:", error);
-      // Don't throw error to allow worker to start without backend
-      logger.warn("Worker Registry service will be disabled");
+      logger.error("Failed to register worker:", error);
+      // Don't throw error to allow worker to continue without backend
+      logger.warn("Worker will continue without backend registration");
     }
   }
 
@@ -103,30 +137,49 @@ class WorkerRegistryService {
       timestamp: new Date().toISOString(),
     };
 
-    const response = await axios.post(
-      `${this.backendUrl}/api/v1/workers/register`,
-      registrationData,
-      {
-        timeout: 10000,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.workerAuthToken}`,
-        },
-      }
-    );
-
-    logger.info("Worker registered successfully:", {
+    logger.debug("Attempting worker registration:", {
+      url: `${this.backendUrl}/api/v1/workers/register`,
       workerId: this.workerId,
       endpoint: this.workerEndpoint,
-      version: registrationData.version,
-      environment: registrationData.environment,
-      response: response.data,
+      authToken: this.workerAuthToken
+        ? `${this.workerAuthToken.substring(0, 10)}...`
+        : "NOT_SET",
+      payload: registrationData,
     });
 
-    // Start heartbeat after successful registration
-    this.startHeartbeat();
+    try {
+      const response = await axios.post(
+        `${this.backendUrl}/api/v1/workers/register`,
+        registrationData,
+        {
+          timeout: 15000, // Increased timeout
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.workerAuthToken}`,
+          },
+        }
+      );
 
-    return response.data;
+      logger.info("Worker registered successfully:", {
+        workerId: this.workerId,
+        endpoint: this.workerEndpoint,
+        version: registrationData.version,
+        environment: registrationData.environment,
+        response: response.data,
+      });
+
+      // Start heartbeat after successful registration
+      this.startHeartbeat();
+
+      return response.data;
+    } catch (error) {
+      logger.error("Worker registration failed:", {
+        workerId: this.workerId,
+        error: error.message,
+        status: error.response?.status,
+      });
+      throw error;
+    }
   }
 
   startHeartbeat() {
@@ -239,39 +292,105 @@ class WorkerRegistryService {
     try {
       // Use webhook endpoints for session status updates
       let endpoint;
+      let payload;
+
       if (
         event === "session_status" ||
         event === "qr_ready" ||
-        event === "connected"
+        event === "connected" ||
+        event === "disconnected" ||
+        event === "session_auto_disconnected" ||
+        event === "reconnecting" ||
+        event === "error"
       ) {
+        // Session status webhook - send direct payload format expected by backend
         endpoint = `${this.backendUrl}/api/v1/webhooks/session-status`;
+
+        // Map event to proper status
+        let status;
+        switch (event) {
+          case "qr_ready":
+            status = "QR_REQUIRED";
+            break;
+          case "connected":
+            status = "CONNECTED";
+            break;
+          case "disconnected":
+          case "session_auto_disconnected":
+            status = "DISCONNECTED";
+            break;
+          case "reconnecting":
+            status = "RECONNECTING";
+            break;
+          case "error":
+            status = "ERROR";
+            break;
+          default:
+            status = "INIT";
+        }
+
+        // Send payload format that matches backend expectation: { status, qrCode, phoneNumber, timestamp }
+        payload = {
+          status,
+          timestamp: new Date().toISOString(),
+        };
+
+        // Add optional fields based on status
+        if (status === "QR_REQUIRED" && data.qrCode) {
+          payload.qrCode = data.qrCode;
+        } else if (status === "CONNECTED" && data.phoneNumber) {
+          payload.phoneNumber = data.phoneNumber;
+        } else if (status === "DISCONNECTED") {
+          // Always clear both QR code and phone number when disconnected
+          payload.qrCode = null;
+          payload.phoneNumber = null;
+        }
       } else if (event === "message_status") {
+        // Message status webhook
         endpoint = `${this.backendUrl}/api/v1/webhooks/message-status`;
+        payload = {
+          sessionId,
+          messageId: data.messageId,
+          status: data.status,
+          timestamp: new Date().toISOString(),
+          ...data,
+        };
       } else {
-        // Fallback to general events endpoint
+        // General worker events
         endpoint = `${this.backendUrl}/api/v1/workers/${this.workerId}/events`;
+        payload = {
+          event,
+          sessionId,
+          workerId: this.workerId,
+          data,
+          timestamp: new Date().toISOString(),
+        };
       }
 
-      const eventData = {
-        event,
-        sessionId,
-        workerId: this.workerId,
-        data,
-        timestamp: new Date().toISOString(),
-      };
-
-      await axios.post(endpoint, eventData, {
-        timeout: 5000,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.workerAuthToken}`,
-        },
-      });
+      // For session status webhooks, send to session-specific endpoint
+      if (endpoint.includes("/webhooks/session-status")) {
+        await axios.post(`${endpoint}/${sessionId}`, payload, {
+          timeout: 5000,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.workerAuthToken}`,
+          },
+        });
+      } else {
+        await axios.post(endpoint, payload, {
+          timeout: 5000,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.workerAuthToken}`,
+          },
+        });
+      }
 
       logger.debug("Backend notification sent:", {
         event,
         sessionId,
         endpoint,
+        status: payload.status || event,
       });
     } catch (error) {
       logger.error("Failed to notify backend:", {

@@ -10,14 +10,14 @@ import {
 
 const router = express.Router();
 
-// Create new WhatsApp session
+// Start WhatsApp session (create if new, connect if existing)
 router.post(
-  "/create",
+  "/start",
   sessionRateLimit,
   validateSessionCreation,
   async (req, res, next) => {
     try {
-      await global.controllers.session.createSession(req, res);
+      await global.controllers.session.startSession(req, res);
     } catch (error) {
       next(error);
     }
@@ -69,6 +69,48 @@ router.post("/:sessionId/send", async (req, res, next) => {
     next(error);
   }
 });
+
+// Restart session (stop and start again, keep auth data)
+router.post(
+  "/:sessionId/restart",
+  sessionRateLimit,
+  validateSessionId,
+  async (req, res, next) => {
+    try {
+      await global.controllers.session.restartSession(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Disconnect session (stop session, keep auth data for instant reconnect)
+router.post(
+  "/:sessionId/disconnect",
+  sessionRateLimit,
+  validateSessionId,
+  async (req, res, next) => {
+    try {
+      await global.controllers.session.disconnectSession(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Logout session (stop session and delete auth data, requires QR scan)
+router.post(
+  "/:sessionId/logout",
+  sessionRateLimit,
+  validateSessionId,
+  async (req, res, next) => {
+    try {
+      await global.controllers.session.logoutSession(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 // List all sessions
 router.get("/", async (req, res, next) => {

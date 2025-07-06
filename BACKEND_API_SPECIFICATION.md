@@ -130,7 +130,7 @@ Authorization: Bearer worker-secret-token-12345
   "data": {
     "status": "connected",
     "phoneNumber": "+6281234567890",
-    "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+    "qrCode": "....."
   },
   "timestamp": "2024-01-15T10:30:00.000Z"
 }
