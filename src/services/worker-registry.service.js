@@ -226,29 +226,34 @@ class WorkerRegistryService {
   }
 
   async getWorkerMetrics() {
-    const sessions = this.baileysService
-      ? this.baileysService.sessions
-      : new Map();
-    const qrCodes = this.baileysService
-      ? this.baileysService.qrCodes
-      : new Map();
+    let sessionStats = {
+      total: 0,
+      connected: 0,
+      disconnected: 0,
+      qr_required: 0,
+      reconnecting: 0,
+      error: 0,
+      initializing: 0,
+    };
 
-    // Count sessions by status
-    let connected = 0;
-    let disconnected = 0;
-    let qr_required = qrCodes.size;
-    let reconnecting = 0;
-    let error = 0;
-
-    for (const [sessionId, socket] of sessions) {
-      if (socket && socket.user) {
-        connected++;
-      } else if (socket && socket.readyState === 1) {
-        reconnecting++;
-      } else if (socket && socket.readyState === 3) {
-        error++;
-      } else {
-        disconnected++;
+    // Get session statistics from Baileys service if available
+    if (this.baileysService) {
+      try {
+        sessionStats = this.baileysService.getSessionStatistics();
+        logger.debug("Session statistics from Baileys service:", sessionStats);
+      } catch (error) {
+        logger.warn(
+          "Failed to get session statistics from Baileys service:",
+          error
+        );
+        // Fallback to manual counting if the method fails
+        try {
+          sessionStats.total = this.baileysService.getSessionCount() || 0;
+          sessionStats.connected =
+            this.baileysService.getConnectedSessionCount() || 0;
+        } catch (fallbackError) {
+          logger.warn("Fallback session counting also failed:", fallbackError);
+        }
       }
     }
 
@@ -266,12 +271,7 @@ class WorkerRegistryService {
 
     return {
       sessions: {
-        total: sessions.size,
-        connected,
-        disconnected,
-        qr_required,
-        reconnecting,
-        error,
+        ...sessionStats,
         maxSessions: this.maxSessions,
       },
       cpuUsage,
@@ -279,6 +279,32 @@ class WorkerRegistryService {
       uptime: Math.round(process.uptime()),
       messageCount,
     };
+  }
+
+  /**
+   * Extract and format phone number from WhatsApp ID
+   * @param {string} whatsappId - WhatsApp ID format: "6285179971457:52@s.whatsapp.net"
+   * @returns {string} - Formatted phone number: "+6285179971457"
+   */
+  formatPhoneNumber(whatsappId) {
+    if (!whatsappId || typeof whatsappId !== "string") {
+      return null;
+    }
+
+    try {
+      // Extract phone number from WhatsApp ID format
+      // Format: "6285179971457:52@s.whatsapp.net" -> "6285179971457"
+      const phoneNumber = whatsappId.split(":")[0].split("@")[0];
+
+      // Add + prefix if not present
+      return phoneNumber.startsWith("+") ? phoneNumber : `+${phoneNumber}`;
+    } catch (error) {
+      logger.warn("Failed to format phone number:", {
+        whatsappId,
+        error: error.message,
+      });
+      return null;
+    }
   }
 
   async notifyBackend(event, sessionId, data = {}) {
@@ -290,25 +316,29 @@ class WorkerRegistryService {
     }
 
     try {
-      // Use webhook endpoints for session status updates
       let endpoint;
       let payload;
 
-      if (
-        event === "session_status" ||
-        event === "qr_ready" ||
-        event === "connected" ||
-        event === "disconnected" ||
-        event === "session_auto_disconnected" ||
-        event === "reconnecting" ||
-        event === "error"
-      ) {
-        // Session status webhook - send direct payload format expected by backend
+      if (event === "message_status") {
+        // Message status webhook
+        endpoint = `${this.backendUrl}/api/v1/webhooks/message-status`;
+        payload = {
+          sessionId,
+          messageId: data.messageId,
+          status: data.status,
+          timestamp: new Date().toISOString(),
+          ...data,
+        };
+      } else {
+        // Session status webhook - all other events are session status updates
         endpoint = `${this.backendUrl}/api/v1/webhooks/session-status`;
 
         // Map event to proper status
         let status;
         switch (event) {
+          case "session_created":
+            status = "INIT";
+            break;
           case "qr_ready":
             status = "QR_REQUIRED";
             break;
@@ -317,6 +347,7 @@ class WorkerRegistryService {
             break;
           case "disconnected":
           case "session_auto_disconnected":
+          case "session_deleted":
             status = "DISCONNECTED";
             break;
           case "reconnecting":
@@ -329,8 +360,9 @@ class WorkerRegistryService {
             status = "INIT";
         }
 
-        // Send payload format that matches backend expectation: { status, qrCode, phoneNumber, timestamp }
+        // Send payload format that matches backend expectation
         payload = {
+          sessionId,
           status,
           timestamp: new Date().toISOString(),
         };
@@ -339,64 +371,38 @@ class WorkerRegistryService {
         if (status === "QR_REQUIRED" && data.qrCode) {
           payload.qrCode = data.qrCode;
         } else if (status === "CONNECTED" && data.phoneNumber) {
-          payload.phoneNumber = data.phoneNumber;
-        } else if (status === "DISCONNECTED") {
-          // Always clear both QR code and phone number when disconnected
-          payload.qrCode = null;
-          payload.phoneNumber = null;
+          // Format phone number properly for backend validation
+          const formattedPhoneNumber = this.formatPhoneNumber(data.phoneNumber);
+          if (formattedPhoneNumber) {
+            payload.phoneNumber = formattedPhoneNumber;
+          }
         }
-      } else if (event === "message_status") {
-        // Message status webhook
-        endpoint = `${this.backendUrl}/api/v1/webhooks/message-status`;
-        payload = {
-          sessionId,
-          messageId: data.messageId,
-          status: data.status,
-          timestamp: new Date().toISOString(),
-          ...data,
-        };
-      } else {
-        // General worker events
-        endpoint = `${this.backendUrl}/api/v1/workers/${this.workerId}/events`;
-        payload = {
-          event,
-          sessionId,
-          workerId: this.workerId,
-          data,
-          timestamp: new Date().toISOString(),
-        };
+        // For DISCONNECTED status, don't include qrCode or phoneNumber fields at all
+        // The backend will handle clearing these fields when status is DISCONNECTED
       }
 
-      // For session status webhooks, send to session-specific endpoint
-      if (endpoint.includes("/webhooks/session-status")) {
-        await axios.post(`${endpoint}/${sessionId}`, payload, {
-          timeout: 5000,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.workerAuthToken}`,
-          },
-        });
-      } else {
-        await axios.post(endpoint, payload, {
-          timeout: 5000,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.workerAuthToken}`,
-          },
-        });
-      }
+      // Send webhook request
+      await axios.post(endpoint, payload, {
+        timeout: 5000,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.workerAuthToken}`,
+        },
+      });
 
-      logger.debug("Backend notification sent:", {
-        event,
+      logger.debug("Webhook sent successfully:", {
         sessionId,
-        endpoint,
         status: payload.status || event,
+        endpoint,
+        phoneNumber: payload.phoneNumber || "N/A",
       });
     } catch (error) {
-      logger.error("Failed to notify backend:", {
+      logger.error("Failed to send webhook:", {
         error: error.message,
-        event,
         sessionId,
+        event,
+        status: error.response?.status,
+        responseData: error.response?.data,
       });
     }
   }

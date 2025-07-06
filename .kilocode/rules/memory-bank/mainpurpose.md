@@ -100,9 +100,9 @@ Customer/Admin → Dashboard Frontend (role-based) → Backend API Gateway → W
 - Advanced troubleshooting tools
 
 ------|-------|----------|-----------|-----|
-| **Free** | $0 | 1 session | Shared pod (50 users) | Best effort |
+| **BASIC** | $0 | 1 session | Shared pod (50 users) | Best effort |
 | **Pro** | $29/month | 5 sessions | Shared pod (10 users) | 99% uptime |
-| **Premium** | $99/month | 20 sessions | Dedicated pod | 99.9% uptime |
+| **MAX** | $99/month | 20 sessions | Dedicated pod | 99.9% uptime |
 
 ## 🚀 Development Phases (Organized by Service)
 
