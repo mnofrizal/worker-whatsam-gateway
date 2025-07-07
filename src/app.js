@@ -256,6 +256,9 @@ class WhatsAppWorker {
       // Register worker with backend AFTER server is listening
       await this.registerWithBackend();
 
+      // Start session recovery process AFTER worker registration
+      await this.startSessionRecovery();
+
       // Setup graceful shutdown
       this.setupGracefulShutdown();
     } catch (error) {
@@ -304,9 +307,12 @@ class WhatsAppWorker {
           workerId: this.config.server.workerId,
         });
 
-        await this.services.workerRegistry.startRegistration();
+        const registrationResult =
+          await this.services.workerRegistry.startRegistration();
+        return registrationResult;
       } else {
         logger.warn("BACKEND_URL not configured, skipping worker registration");
+        return null;
       }
     } catch (error) {
       logger.error("Failed to register with backend:", error);
@@ -314,6 +320,60 @@ class WhatsAppWorker {
       if (this.config.server.nodeEnv === "production") {
         throw error;
       }
+      return null;
+    }
+  }
+
+  async startSessionRecovery() {
+    try {
+      logger.info("Starting session recovery process...");
+
+      // Check if session recovery is enabled
+      if (!this.config.sessionRecovery.enabled) {
+        logger.info("Session recovery disabled, skipping recovery process");
+        return;
+      }
+
+      // Only attempt recovery if backend registration was successful
+      if (!this.services.workerRegistry.isInitialized()) {
+        logger.warn(
+          "Worker registry not initialized, skipping session recovery"
+        );
+        return;
+      }
+
+      // Check if recovery is required from backend response
+      if (!this.services.workerRegistry.isRecoveryRequired()) {
+        logger.info(
+          "Backend indicates no recovery required, skipping session recovery"
+        );
+        return;
+      }
+
+      // Add delay to allow backend to be fully ready
+      const recoveryDelay = this.config.sessionRecovery.startupDelay;
+      logger.info(
+        `Waiting ${recoveryDelay}ms before starting session recovery...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, recoveryDelay));
+
+      // Start session recovery
+      const recoveryResult =
+        await this.services.baileys.loadPersistedSessions();
+
+      if (recoveryResult.success) {
+        logger.info("Session recovery completed successfully", {
+          totalSessions: recoveryResult.totalSessions,
+          recoveredSessions: recoveryResult.recoveredSessions,
+          failedSessions: recoveryResult.failedSessions,
+        });
+      } else {
+        logger.warn("Session recovery completed with issues", recoveryResult);
+      }
+    } catch (error) {
+      logger.error("Session recovery process failed:", error);
+      // Don't throw error to allow worker to continue without recovery
+      logger.warn("Worker will continue without session recovery");
     }
   }
 

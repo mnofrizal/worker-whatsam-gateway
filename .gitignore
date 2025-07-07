@@ -31,10 +31,6 @@ bower_components/
 
 # dotenv environment variable files
 
-.env.test
-.env.development
-.env.production
-.env.local
 
 # Mac system files
 .DS_Store

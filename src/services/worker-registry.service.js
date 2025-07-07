@@ -17,6 +17,7 @@ class WorkerRegistryService {
     this.registrationRetries = 0;
     this.maxRegistrationRetries = config.backend.maxRegistrationRetries;
     this.registrationRetryInterval = config.backend.registrationRetryInterval;
+    this.recoveryRequired = false;
   }
 
   setServices(baileysService) {
@@ -131,10 +132,8 @@ class WorkerRegistryService {
       endpoint: this.workerEndpoint,
       maxSessions: this.maxSessions,
       description: this.config.server.description || "WhatsApp Worker Instance",
-      status: "ONLINE",
       version: process.env.npm_package_version || "1.0.0",
       environment: this.config.server.nodeEnv.toUpperCase(),
-      timestamp: new Date().toISOString(),
     };
 
     logger.debug("Attempting worker registration:", {
@@ -165,8 +164,13 @@ class WorkerRegistryService {
         endpoint: this.workerEndpoint,
         version: registrationData.version,
         environment: registrationData.environment,
+        recoveryRequired: response.data.data?.recoveryRequired || false,
+        assignedSessionCount: response.data.data?.assignedSessionCount || 0,
         response: response.data,
       });
+
+      // Store recovery information
+      this.recoveryRequired = response.data.data?.recoveryRequired || false;
 
       // Start heartbeat after successful registration
       this.startHeartbeat();
@@ -407,6 +411,132 @@ class WorkerRegistryService {
     }
   }
 
+  /**
+   * Get assigned sessions from backend for this worker
+   */
+  async getAssignedSessions() {
+    if (!this.initialized) {
+      logger.warn(
+        "Worker Registry not initialized, cannot get assigned sessions"
+      );
+      return [];
+    }
+
+    try {
+      const response = await axios.get(
+        `${this.backendUrl}/api/v1/workers/${this.workerId}/sessions/assigned`,
+        {
+          timeout: 10000,
+          headers: {
+            Authorization: `Bearer ${this.workerAuthToken}`,
+          },
+        }
+      );
+
+      const sessions = response.data?.data?.sessions || [];
+      logger.info(
+        `Retrieved ${sessions.length} assigned sessions from backend`
+      );
+
+      return sessions;
+    } catch (error) {
+      logger.error("Failed to get assigned sessions from backend:", {
+        error: error.message,
+        status: error.response?.status,
+        workerId: this.workerId,
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Report session recovery status to backend
+   */
+  async reportRecoveryStatus(recoveryData) {
+    if (!this.initialized) {
+      logger.warn(
+        "Worker Registry not initialized, cannot report recovery status"
+      );
+      return;
+    }
+
+    try {
+      const payload = {
+        recoveryResults: recoveryData.sessionResults || [],
+        summary: {
+          totalSessions: recoveryData.totalSessions || 0,
+          successfulRecoveries: recoveryData.recoveredSessions || 0,
+          failedRecoveries: recoveryData.failedSessions || 0,
+          skippedRecoveries: recoveryData.skippedSessions || 0,
+        },
+      };
+
+      await axios.post(
+        `${this.backendUrl}/api/v1/workers/${this.workerId}/sessions/recovery-status`,
+        payload,
+        {
+          timeout: 10000,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.workerAuthToken}`,
+          },
+        }
+      );
+
+      logger.info("Recovery status reported to backend successfully", {
+        totalSessions: recoveryData.totalSessions,
+        recoveredSessions: recoveryData.recoveredSessions,
+        failedSessions: recoveryData.failedSessions,
+      });
+    } catch (error) {
+      logger.error("Failed to report recovery status to backend:", {
+        error: error.message,
+        status: error.response?.status,
+        workerId: this.workerId,
+      });
+    }
+  }
+
+  /**
+   * Notify backend about preserved sessions during shutdown
+   */
+  async notifySessionsPreserved(preservedSessions) {
+    if (!this.initialized) {
+      logger.warn(
+        "Worker Registry not initialized, cannot notify about preserved sessions"
+      );
+      return;
+    }
+
+    try {
+      await axios.post(
+        `${this.backendUrl}/api/v1/workers/${this.workerId}/sessions-preserved`,
+        {
+          workerId: this.workerId,
+          preservedSessions,
+          timestamp: new Date().toISOString(),
+        },
+        {
+          timeout: 10000,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.workerAuthToken}`,
+          },
+        }
+      );
+
+      logger.info(
+        `Notified backend about ${preservedSessions.length} preserved sessions`
+      );
+    } catch (error) {
+      logger.error("Failed to notify backend about preserved sessions:", {
+        error: error.message,
+        status: error.response?.status,
+        workerId: this.workerId,
+      });
+    }
+  }
+
   async unregisterWorker() {
     if (!this.initialized) {
       return;
@@ -451,6 +581,10 @@ class WorkerRegistryService {
 
   isInitialized() {
     return this.initialized;
+  }
+
+  isRecoveryRequired() {
+    return this.recoveryRequired;
   }
 
   getWorkerId() {

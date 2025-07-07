@@ -148,6 +148,18 @@ const config = {
       process.env.WHATSAPP_HIGH_QUALITY_PREVIEW !== "false",
   },
 
+  // Session Recovery Configuration
+  sessionRecovery: {
+    enabled: process.env.SESSION_RECOVERY_ENABLED !== "false",
+    startupDelay: parseInt(process.env.SESSION_RECOVERY_STARTUP_DELAY) || 5000, // 5 seconds
+    recoveryTimeout: parseInt(process.env.SESSION_RECOVERY_TIMEOUT) || 30000, // 30 seconds
+    maxRetries: parseInt(process.env.SESSION_RECOVERY_MAX_RETRIES) || 3,
+    retryDelay: parseInt(process.env.SESSION_RECOVERY_RETRY_DELAY) || 5000, // 5 seconds
+    preserveOnShutdown: process.env.SESSION_PRESERVE_ON_SHUTDOWN !== "false",
+    gracefulShutdownTimeout:
+      parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT) || 10000, // 10 seconds
+  },
+
   // Health Check Configuration
   health: {
     enableHealthCheck: process.env.ENABLE_HEALTH_CHECK !== "false",

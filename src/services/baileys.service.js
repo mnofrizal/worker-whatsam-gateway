@@ -79,9 +79,13 @@ class BaileysService {
         lastSeen: new Date().toISOString(),
       });
 
-      // Handle connection updates
+      // Handle connection updates - use recovery handler if this is a recovered session
       socket.ev.on("connection.update", (update) => {
-        this.handleConnectionUpdate(sessionId, update).catch((error) => {
+        const handler = options.isRecovery
+          ? this.handleRecoveredConnectionUpdate.bind(this)
+          : this.handleConnectionUpdate.bind(this);
+
+        handler(sessionId, update).catch((error) => {
           logger.error(
             `Error in connection update handler for ${sessionId}:`,
             error
@@ -856,10 +860,396 @@ class BaileysService {
     };
   }
 
+  /**
+   * Load and restore persisted sessions from storage
+   * Called during worker startup to recover sessions after restart
+   */
+  async loadPersistedSessions() {
+    try {
+      logger.info("Starting session recovery process...");
+
+      // Get assigned sessions from backend
+      const assignedSessions = await this.getAssignedSessionsFromBackend();
+
+      if (!assignedSessions || assignedSessions.length === 0) {
+        logger.info("No assigned sessions found for recovery");
+        return { success: true, recoveredSessions: 0 };
+      }
+
+      logger.info(
+        `Found ${assignedSessions.length} assigned sessions for recovery`
+      );
+
+      let recoveredCount = 0;
+      let failedCount = 0;
+      const recoveryResults = [];
+
+      // Process each assigned session
+      for (const sessionInfo of assignedSessions) {
+        try {
+          const result = await this.restoreSessionFromStorage(sessionInfo);
+          if (result.success) {
+            recoveredCount++;
+            recoveryResults.push({
+              sessionId: sessionInfo.sessionId,
+              status: "recovered",
+              result,
+            });
+          } else {
+            failedCount++;
+            recoveryResults.push({
+              sessionId: sessionInfo.sessionId,
+              status: "failed",
+              reason: result.reason,
+            });
+          }
+        } catch (error) {
+          failedCount++;
+          logger.error(
+            `Failed to recover session ${sessionInfo.sessionId}:`,
+            error
+          );
+          recoveryResults.push({
+            sessionId: sessionInfo.sessionId,
+            status: "error",
+            error: error.message,
+          });
+        }
+      }
+
+      // Report recovery status to backend
+      await this.reportRecoveryStatus({
+        totalSessions: assignedSessions.length,
+        recoveredSessions: recoveredCount,
+        failedSessions: failedCount,
+        results: recoveryResults,
+      });
+
+      logger.info(
+        `Session recovery completed: ${recoveredCount} recovered, ${failedCount} failed`
+      );
+
+      return {
+        success: true,
+        totalSessions: assignedSessions.length,
+        recoveredSessions: recoveredCount,
+        failedSessions: failedCount,
+        results: recoveryResults,
+      };
+    } catch (error) {
+      logger.error("Session recovery process failed:", error);
+      throw new Error(`Session recovery failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get assigned sessions from backend for this worker
+   */
+  async getAssignedSessionsFromBackend() {
+    try {
+      if (!global.services?.workerRegistry?.isInitialized()) {
+        logger.warn(
+          "Worker registry not initialized, cannot get assigned sessions"
+        );
+        return [];
+      }
+
+      // Check if recovery is required first
+      if (!global.services.workerRegistry.isRecoveryRequired()) {
+        logger.info("No recovery required, skipping session retrieval");
+        return [];
+      }
+
+      const assignedSessions =
+        await global.services.workerRegistry.getAssignedSessions();
+      return assignedSessions || [];
+    } catch (error) {
+      logger.error("Failed to get assigned sessions from backend:", error);
+      return [];
+    }
+  }
+
+  /**
+   * Restore individual session from storage
+   */
+  async restoreSessionFromStorage(sessionInfo) {
+    const { sessionId, userId, status } = sessionInfo;
+
+    try {
+      logger.info(
+        `Attempting to restore session ${sessionId} for user ${userId}`
+      );
+
+      // Check if session already exists in memory
+      if (this.sessions.has(sessionId)) {
+        logger.warn(
+          `Session ${sessionId} already exists in memory, skipping recovery`
+        );
+        return { success: false, reason: "Session already exists" };
+      }
+
+      // Only restore sessions that were previously connected or in QR state
+      if (!["CONNECTED", "QR_REQUIRED", "RECONNECTING"].includes(status)) {
+        logger.info(
+          `Skipping recovery for session ${sessionId} with status ${status}`
+        );
+        return { success: false, reason: `Status ${status} not recoverable` };
+      }
+
+      // Download session files from storage if available
+      if (global.services?.storage?.isInitialized()) {
+        try {
+          const downloadResult =
+            await global.services.storage.downloadSessionFiles(sessionId);
+          if (!downloadResult.success) {
+            logger.warn(
+              `No session files found in storage for ${sessionId}, will create new session`
+            );
+          } else {
+            logger.info(
+              `Downloaded ${downloadResult.filesDownloaded} session files for ${sessionId}`
+            );
+          }
+        } catch (error) {
+          logger.warn(
+            `Failed to download session files for ${sessionId}:`,
+            error
+          );
+          // Continue with recovery attempt even if download fails
+        }
+      }
+
+      // Create session with recovery flag
+      const createResult = await this.createSession(sessionId, userId, {
+        isRecovery: true,
+        previousStatus: status,
+      });
+
+      if (createResult.success) {
+        // Set initial status based on previous state
+        this.updateSessionStatus(sessionId, {
+          status: status === "CONNECTED" ? "reconnecting" : "initializing",
+          isRecovered: true,
+          recoveredAt: new Date().toISOString(),
+          previousStatus: status,
+        });
+
+        logger.info(`Session ${sessionId} restored successfully`);
+        return {
+          success: true,
+          sessionId,
+          previousStatus: status,
+          currentStatus: this.getSessionStatus(sessionId).status,
+        };
+      } else {
+        return { success: false, reason: "Failed to create session" };
+      }
+    } catch (error) {
+      logger.error(`Failed to restore session ${sessionId}:`, error);
+      return { success: false, reason: error.message };
+    }
+  }
+
+  /**
+   * Handle connection updates for recovered sessions
+   */
+  async handleRecoveredConnectionUpdate(sessionId, update) {
+    const { connection, lastDisconnect, qr } = update;
+    const sessionInfo = this.sessionStatus.get(sessionId);
+
+    if (!sessionInfo?.isRecovered) {
+      // Not a recovered session, use normal handler
+      return this.handleConnectionUpdate(sessionId, update);
+    }
+
+    logger.info(`Recovered session connection update for ${sessionId}:`, {
+      connection,
+      previousStatus: sessionInfo.previousStatus,
+      lastDisconnect: lastDisconnect?.error?.message,
+    });
+
+    try {
+      if (qr) {
+        // Handle QR code for recovered session
+        await this.handleConnectionUpdate(sessionId, update);
+      } else if (connection === "open") {
+        // Successfully reconnected
+        const socket = this.sessions.get(sessionId);
+        const phoneNumber = socket?.user?.id;
+
+        this.updateSessionStatus(sessionId, {
+          status: "connected",
+          phoneNumber,
+          connectedAt: new Date().toISOString(),
+          recoverySuccessful: true,
+        });
+
+        // Clear recovery flags
+        delete sessionInfo.isRecovered;
+        delete sessionInfo.previousStatus;
+
+        // Notify backend about successful recovery
+        await this.notifyBackend("connected", sessionId, {
+          phoneNumber,
+          isRecovered: true,
+        });
+
+        // Upload session files to storage
+        if (global.services?.storage) {
+          try {
+            await global.services.storage.uploadSessionFiles(sessionId);
+            logger.info(
+              `Session files uploaded for recovered session ${sessionId}`
+            );
+          } catch (error) {
+            logger.error(
+              `Failed to upload session files for recovered session ${sessionId}:`,
+              error
+            );
+          }
+        }
+
+        logger.info(`Recovered session ${sessionId} connected successfully`);
+      } else if (connection === "close") {
+        // Handle disconnection for recovered session
+        const shouldReconnect =
+          !this.manualDisconnections.has(sessionId) &&
+          lastDisconnect?.error?.output?.statusCode !==
+            DisconnectReason.loggedOut;
+
+        if (shouldReconnect) {
+          logger.info(
+            `Recovered session ${sessionId} disconnected, will attempt reconnection`
+          );
+          this.updateSessionStatus(sessionId, {
+            status: "reconnecting",
+            lastDisconnect: lastDisconnect?.error?.message,
+          });
+
+          // Attempt reconnection after delay
+          setTimeout(() => {
+            this.reconnectSession(sessionId).catch((error) => {
+              logger.error(
+                `Reconnection failed for recovered session ${sessionId}:`,
+                error
+              );
+            });
+          }, 5000);
+        } else {
+          logger.info(
+            `Recovered session ${sessionId} permanently disconnected`
+          );
+          this.updateSessionStatus(sessionId, {
+            status: "disconnected",
+            lastDisconnect: lastDisconnect?.error?.message,
+            recoveryFailed: true,
+          });
+
+          // Clean up failed recovery session
+          this.cleanupSession(sessionId).catch((error) => {
+            logger.error(
+              `Failed to cleanup failed recovery session ${sessionId}:`,
+              error
+            );
+          });
+        }
+      }
+    } catch (error) {
+      logger.error(
+        `Error handling recovered session connection update for ${sessionId}:`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Report session recovery status to backend
+   */
+  async reportRecoveryStatus(recoveryData) {
+    try {
+      if (global.services?.workerRegistry?.isInitialized()) {
+        await global.services.workerRegistry.reportRecoveryStatus(recoveryData);
+        logger.info("Recovery status reported to backend successfully");
+      }
+    } catch (error) {
+      logger.error("Failed to report recovery status to backend:", error);
+    }
+  }
+
+  /**
+   * Preserve session state before shutdown
+   */
+  async preserveSessionsForShutdown() {
+    try {
+      logger.info("Preserving session state for graceful shutdown...");
+
+      const activeSessions = Array.from(this.sessionStatus.entries())
+        .filter(([, sessionInfo]) =>
+          ["connected", "qr_ready"].includes(sessionInfo.status)
+        )
+        .map(([sessionId, sessionInfo]) => ({
+          sessionId,
+          userId: sessionInfo.userId,
+          status: sessionInfo.status,
+          phoneNumber: sessionInfo.phoneNumber,
+          preservedAt: new Date().toISOString(),
+        }));
+
+      if (activeSessions.length > 0) {
+        // Upload session files to storage for all active sessions
+        for (const sessionInfo of activeSessions) {
+          try {
+            if (global.services?.storage?.isInitialized()) {
+              await global.services.storage.uploadSessionFiles(
+                sessionInfo.sessionId
+              );
+              logger.info(
+                `Session files preserved for ${sessionInfo.sessionId}`
+              );
+            }
+          } catch (error) {
+            logger.error(
+              `Failed to preserve session files for ${sessionInfo.sessionId}:`,
+              error
+            );
+          }
+        }
+
+        // Notify backend about preserved sessions
+        if (global.services?.workerRegistry?.isInitialized()) {
+          try {
+            await global.services.workerRegistry.notifySessionsPreserved(
+              activeSessions
+            );
+            logger.info(
+              `Notified backend about ${activeSessions.length} preserved sessions`
+            );
+          } catch (error) {
+            logger.error(
+              "Failed to notify backend about preserved sessions:",
+              error
+            );
+          }
+        }
+      }
+
+      logger.info(
+        `Session preservation completed for ${activeSessions.length} sessions`
+      );
+      return { success: true, preservedSessions: activeSessions.length };
+    } catch (error) {
+      logger.error("Failed to preserve sessions for shutdown:", error);
+      return { success: false, error: error.message };
+    }
+  }
+
   // Shutdown method for graceful cleanup
   async shutdown() {
     try {
       logger.info("Shutting down Baileys service...");
+
+      // Preserve session state before closing
+      await this.preserveSessionsForShutdown();
 
       // Close all active sessions
       await this.closeAllSessions();
