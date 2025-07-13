@@ -193,15 +193,11 @@ class WorkerRegistryService {
 
     this.heartbeatInterval = setInterval(async () => {
       try {
-        const metrics = await this.getWorkerMetrics();
+        const heartbeatPayload = await this.getEnhancedHeartbeatPayload();
 
         await axios.put(
           `${this.backendUrl}/api/v1/workers/${this.workerId}/heartbeat`,
-          {
-            status: "ONLINE",
-            metrics,
-            timestamp: new Date().toISOString(),
-          },
+          heartbeatPayload,
           {
             timeout: 5000,
             headers: {
@@ -211,9 +207,10 @@ class WorkerRegistryService {
           }
         );
 
-        logger.debug("Heartbeat sent successfully", {
+        logger.debug("Enhanced heartbeat sent successfully", {
           workerId: this.workerId,
-          sessionCount: metrics.sessions.total,
+          sessionCount: heartbeatPayload.metrics.totalSessions,
+          activeSessions: heartbeatPayload.metrics.activeSessions,
         });
       } catch (error) {
         logger.error("Heartbeat failed:", {
@@ -223,65 +220,93 @@ class WorkerRegistryService {
       }
     }, this.heartbeatIntervalMs);
 
-    logger.info("Heartbeat started", {
+    logger.info("Enhanced heartbeat started", {
       workerId: this.workerId,
       interval: this.heartbeatIntervalMs,
     });
   }
 
-  async getWorkerMetrics() {
-    let sessionStats = {
-      total: 0,
-      connected: 0,
-      disconnected: 0,
-      qr_required: 0,
-      reconnecting: 0,
-      error: 0,
-      initializing: 0,
-    };
+  /**
+   * Get enhanced heartbeat payload with detailed session information
+   */
+  async getEnhancedHeartbeatPayload() {
+    const sessions = [];
+    let messageCount = 0;
 
-    // Get session statistics from Baileys service if available
+    // Get detailed session information from Baileys service if available
     if (this.baileysService) {
       try {
-        sessionStats = this.baileysService.getSessionStatistics();
-        logger.debug("Session statistics from Baileys service:", sessionStats);
+        const allSessions = this.baileysService.getAllSessions();
+
+        for (const [sessionId, sessionInfo] of allSessions) {
+          // Map internal status to backend expected status
+          let status = "DISCONNECTED";
+          switch (sessionInfo.status) {
+            case "connected":
+              status = "CONNECTED";
+              break;
+            case "qr_ready":
+              status = "QR_REQUIRED";
+              break;
+            case "reconnecting":
+            case "restarting":
+              status = "RECONNECTING";
+              break;
+            case "initializing":
+              status = "INIT";
+              break;
+            case "disconnected":
+            case "logged_out":
+            case "failed":
+            default:
+              status = "DISCONNECTED";
+              break;
+          }
+
+          sessions.push({
+            sessionId,
+            status,
+            phoneNumber:
+              this.formatPhoneNumber(sessionInfo.phoneNumber) || null,
+            lastActivity: sessionInfo.lastSeen || new Date().toISOString(),
+          });
+        }
+
+        // Get message count if available (placeholder for now)
+        messageCount = 0; // Would need database integration for actual count
       } catch (error) {
         logger.warn(
-          "Failed to get session statistics from Baileys service:",
+          "Failed to get detailed session information from Baileys service:",
           error
         );
-        // Fallback to manual counting if the method fails
-        try {
-          sessionStats.total = this.baileysService.getSessionCount() || 0;
-          sessionStats.connected =
-            this.baileysService.getConnectedSessionCount() || 0;
-        } catch (fallbackError) {
-          logger.warn("Fallback session counting also failed:", fallbackError);
-        }
       }
     }
 
-    // Get simple system metrics
+    // Get basic system metrics
     const memoryUsage = process.memoryUsage();
     const memoryPercent = Math.round(
       (memoryUsage.heapUsed / memoryUsage.heapTotal) * 100
     );
 
-    // Simple CPU usage (approximation - would need external lib for real monitoring)
-    const cpuUsage = Math.round(Math.random() * 20 + 30); // Placeholder
+    // Simple CPU usage approximation
+    const cpuUsage = Math.round(Math.random() * 20 + 30); // Placeholder - would need external lib for real monitoring
 
-    // Get message count (placeholder for now)
-    const messageCount = 0; // Would need database integration
+    // Count active sessions
+    const activeSessions = sessions.filter(
+      (s) => s.status === "CONNECTED"
+    ).length;
 
     return {
-      sessions: {
-        ...sessionStats,
-        maxSessions: this.maxSessions,
+      sessions,
+      metrics: {
+        cpuUsage,
+        memoryUsage: memoryPercent,
+        uptime: Math.round(process.uptime()),
+        messageCount,
+        totalSessions: sessions.length,
+        activeSessions,
       },
-      cpuUsage,
-      memoryUsage: memoryPercent,
-      uptime: Math.round(process.uptime()),
-      messageCount,
+      lastActivity: new Date().toISOString(),
     };
   }
 

@@ -291,6 +291,10 @@ class WhatsAppWorker {
       await this.services.workerRegistry.initialize();
       logger.info("Worker Registry service initialized");
 
+      // Set service dependencies for Worker Registry
+      this.services.workerRegistry.setServices(this.services.baileys);
+      logger.info("Worker Registry service dependencies set");
+
       logger.info("All services initialized successfully");
     } catch (error) {
       logger.error("Service initialization failed:", error);
