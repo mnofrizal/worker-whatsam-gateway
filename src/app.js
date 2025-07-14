@@ -113,8 +113,19 @@ class WhatsAppWorker {
       this.app.set("trust proxy", true);
     }
 
-    // Rate limiting
-    this.app.use(generalRateLimit);
+    // Rate limiting configuration
+    const rateLimitingEnabled =
+      this.config.server.nodeEnv === "production" &&
+      process.env.RATE_LIMITING_ENABLED !== "false";
+
+    if (rateLimitingEnabled) {
+      this.app.use(generalRateLimit);
+      logger.info("Rate limiting enabled");
+    } else {
+      logger.info(
+        `Rate limiting disabled (NODE_ENV: ${this.config.server.nodeEnv}, RATE_LIMITING_ENABLED: ${process.env.RATE_LIMITING_ENABLED || "not set"})`
+      );
+    }
 
     // Body parsing middleware
     this.app.use(

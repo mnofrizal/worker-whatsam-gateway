@@ -386,7 +386,6 @@ class BaileysService {
       return {
         messageId: result.key.id,
         status: "sent",
-        timestamp: new Date().toISOString(),
         to,
       };
     } catch (error) {

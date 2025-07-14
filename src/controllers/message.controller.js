@@ -41,13 +41,15 @@ class MessageController {
 
       // Validate phone number format
       if (!Utils.isValidPhoneNumber(to)) {
-        return res
-          .status(HTTP_STATUS.BAD_REQUEST)
-          .json(
-            ApiResponse.createValidationErrorResponse([
-              { field: "to", message: "Invalid phone number format" },
-            ])
-          );
+        return res.status(HTTP_STATUS.BAD_REQUEST).json(
+          ApiResponse.createValidationErrorResponse("Validation failed", [
+            {
+              field: "to",
+              message:
+                "Invalid phone number format. Supported formats: +6287733760363, 087733760363, 87733760363, or 6287733760363@s.whatsapp.net",
+            },
+          ])
+        );
       }
 
       // Check session status
@@ -64,7 +66,19 @@ class MessageController {
       }
 
       // Format WhatsApp number using Utils helper
-      const formattedTo = to.includes("@") ? to : Utils.formatWhatsAppId(to);
+      let formattedTo;
+      try {
+        formattedTo = Utils.formatWhatsAppId(to);
+      } catch (error) {
+        return res.status(HTTP_STATUS.BAD_REQUEST).json(
+          ApiResponse.createValidationErrorResponse("Validation failed", [
+            {
+              field: "to",
+              message: `Phone number formatting error: ${error.message}`,
+            },
+          ])
+        );
+      }
 
       // Send message
       const result = await this.baileysService.sendMessage(
@@ -132,8 +146,12 @@ class MessageController {
         return res
           .status(HTTP_STATUS.BAD_REQUEST)
           .json(
-            ApiResponse.createValidationErrorResponse([
-              { field: "to", message: "Invalid phone number format" },
+            ApiResponse.createValidationErrorResponse("Validation failed", [
+              {
+                field: "to",
+                message:
+                  "Invalid phone number format. Supported formats: +6287733760363, 087733760363, 87733760363, or 6287733760363@s.whatsapp.net",
+              },
             ])
           );
       }
@@ -152,7 +170,21 @@ class MessageController {
       }
 
       // Format WhatsApp number using Utils helper
-      const formattedTo = to.includes("@") ? to : Utils.formatWhatsAppId(to);
+      let formattedTo;
+      try {
+        formattedTo = Utils.formatWhatsAppId(to);
+      } catch (error) {
+        return res
+          .status(HTTP_STATUS.BAD_REQUEST)
+          .json(
+            ApiResponse.createValidationErrorResponse("Validation failed", [
+              {
+                field: "to",
+                message: `Phone number formatting error: ${error.message}`,
+              },
+            ])
+          );
+      }
 
       // Upload media to storage
       let mediaUrl = null;
@@ -277,9 +309,20 @@ class MessageController {
       };
 
       if (contact) {
-        filters.contact = contact.includes("@")
-          ? contact
-          : Utils.formatWhatsAppId(contact);
+        try {
+          filters.contact = Utils.formatWhatsAppId(contact);
+        } catch (error) {
+          return res
+            .status(HTTP_STATUS.BAD_REQUEST)
+            .json(
+              ApiResponse.createValidationErrorResponse("Validation failed", [
+                {
+                  field: "contact",
+                  message: `Phone number formatting error: ${error.message}`,
+                },
+              ])
+            );
+        }
       }
 
       if (startDate) {
@@ -444,9 +487,17 @@ class MessageController {
           }
 
           // Format WhatsApp number using Utils helper
-          const formattedTo = msg.to.includes("@")
-            ? msg.to
-            : Utils.formatWhatsAppId(msg.to);
+          let formattedTo;
+          try {
+            formattedTo = Utils.formatWhatsAppId(msg.to);
+          } catch (error) {
+            errors.push({
+              index: i,
+              error: `Phone number formatting error: ${error.message}`,
+              message: msg,
+            });
+            continue;
+          }
 
           // Send message
           const result = await this.baileysService.sendMessage(

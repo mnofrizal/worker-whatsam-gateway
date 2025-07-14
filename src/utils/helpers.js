@@ -172,29 +172,60 @@ class Utils {
 
   /**
    * Format phone number for WhatsApp
-   * @param {string} phoneNumber - Phone number
-   * @returns {string} - Formatted WhatsApp ID
+   * @param {string} phoneNumber - Phone number in any format
+   * @returns {string} - Formatted WhatsApp ID (number@s.whatsapp.net)
    */
   static formatWhatsAppId(phoneNumber) {
-    // Remove all non-numeric characters
-    const cleaned = phoneNumber.replace(/\D/g, "");
+    // If already in WhatsApp format, return as is
+    if (phoneNumber.includes("@s.whatsapp.net")) {
+      return phoneNumber;
+    }
 
-    // Add country code if not present
-    if (!cleaned.startsWith("62") && cleaned.length < 12) {
-      return `62${cleaned}@s.whatsapp.net`;
+    // Remove all non-numeric characters except +
+    let cleaned = phoneNumber.replace(/[^\d+]/g, "");
+
+    // Handle different input formats
+    if (cleaned.startsWith("+")) {
+      // International format: +6287733760363 -> 6287733760363
+      cleaned = cleaned.substring(1);
+    } else if (cleaned.startsWith("0")) {
+      // Local format: 087733760363 -> 6287733760363 (assuming Indonesian)
+      cleaned = "62" + cleaned.substring(1);
+    } else if (cleaned.length >= 10 && !cleaned.startsWith("62")) {
+      // Assume it's a local number without leading 0: 87733760363 -> 6287733760363
+      cleaned = "62" + cleaned;
+    }
+
+    // Ensure we have at least a valid length (minimum 10 digits after country code)
+    if (cleaned.length < 10) {
+      throw new Error("Invalid phone number: too short");
     }
 
     return `${cleaned}@s.whatsapp.net`;
   }
 
   /**
-   * Validate phone number format
+   * Validate phone number format (accepts any reasonable phone number format)
    * @param {string} phoneNumber - Phone number to validate
    * @returns {boolean} - Is valid phone number
    */
   static isValidPhoneNumber(phoneNumber) {
-    const phoneRegex = /^(\+?62|0)[0-9]{8,13}$/;
-    return phoneRegex.test(phoneNumber.replace(/\s/g, ""));
+    // If already in WhatsApp format, validate the number part
+    if (phoneNumber.includes("@s.whatsapp.net")) {
+      const numberPart = phoneNumber.split("@")[0];
+      return /^\d{10,15}$/.test(numberPart);
+    }
+
+    // Remove all non-numeric characters except +
+    const cleaned = phoneNumber.replace(/[^\d+]/g, "");
+
+    // Check various formats:
+    // International: +1234567890 to +123456789012345
+    // Local with country code: 1234567890 to 123456789012345
+    // Local format: 0123456789 to 012345678901234
+    const phoneRegex = /^(\+?\d{10,15}|0\d{9,14})$/;
+
+    return phoneRegex.test(cleaned) && cleaned.length >= 10;
   }
 
   /**
