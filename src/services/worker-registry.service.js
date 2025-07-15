@@ -268,6 +268,7 @@ class WorkerRegistryService {
             status,
             phoneNumber:
               this.formatPhoneNumber(sessionInfo.phoneNumber) || null,
+            displayName: sessionInfo.displayName || null,
             lastActivity: sessionInfo.lastSeen || new Date().toISOString(),
           });
         }
@@ -405,7 +406,24 @@ class WorkerRegistryService {
           if (formattedPhoneNumber) {
             payload.phoneNumber = formattedPhoneNumber;
           }
+          // Always include displayName for CONNECTED status (even if null)
+          payload.displayName = data.displayName || null;
         }
+
+        // Always include displayName field - use actual value if available, otherwise null
+        if (status !== "CONNECTED") {
+          // For RECONNECTING status or when we have displayName data, include it
+          if (status === "RECONNECTING" && data.displayName) {
+            payload.displayName = data.displayName;
+          } else if (data.displayName) {
+            // If we have displayName in data for any status, include it
+            payload.displayName = data.displayName;
+          } else {
+            // Only set to null if we truly don't have displayName data
+            payload.displayName = null;
+          }
+        }
+
         // For DISCONNECTED status, don't include qrCode or phoneNumber fields at all
         // The backend will handle clearing these fields when status is DISCONNECTED
       }
@@ -424,6 +442,7 @@ class WorkerRegistryService {
         status: payload.status || event,
         endpoint,
         phoneNumber: payload.phoneNumber || "N/A",
+        displayName: payload.displayName || "N/A",
       });
     } catch (error) {
       logger.error("Failed to send webhook:", {

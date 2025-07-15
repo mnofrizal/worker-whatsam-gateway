@@ -282,10 +282,12 @@ class BaileysService {
       } else if (connection === "open") {
         const socket = this.sessions.get(sessionId);
         const phoneNumber = socket?.user?.id;
+        const displayName = socket?.user?.name || socket?.user?.notify || null;
 
         this.updateSessionStatus(sessionId, {
           status: "connected",
           phoneNumber,
+          displayName,
           connectedAt: new Date().toISOString(),
         });
 
@@ -307,6 +309,7 @@ class BaileysService {
         // Notify backend about successful connection
         await this.notifyBackend("connected", sessionId, {
           phoneNumber,
+          displayName,
         });
 
         // Upload session files to storage
@@ -544,6 +547,9 @@ class BaileysService {
         }
       }
 
+      // Get current displayName before removing socket
+      const displayName = socket?.user?.name || socket?.user?.notify || null;
+
       // Remove from sessions map but keep session status and auth files
       this.sessions.delete(sessionId);
       this.qrCodes.delete(sessionId);
@@ -565,7 +571,9 @@ class BaileysService {
       });
 
       // Notify backend
-      await this.notifyBackend("reconnecting", sessionId);
+      await this.notifyBackend("reconnecting", sessionId, {
+        displayName,
+      });
 
       // Create new session with same user ID
       await this.createSession(sessionId, sessionInfo.userId);
@@ -757,17 +765,51 @@ class BaileysService {
       this.qrTimeouts.delete(sessionId);
     }
 
-    // Clean up storage files
+    // Clean up MinIO storage files
     if (global.services?.storage) {
       try {
         await global.services.storage.deleteSessionFiles(sessionId);
-        logger.info(`Storage files cleaned up for ${sessionId}`);
+        logger.info(`MinIO storage files cleaned up for ${sessionId}`);
       } catch (error) {
         logger.error(
-          `Failed to cleanup storage files for ${sessionId}:`,
+          `Failed to cleanup MinIO storage files for ${sessionId}:`,
           error
         );
       }
+    }
+
+    // Clean up local session files
+    try {
+      const localSessionPath = join(this.storageDir, sessionId);
+
+      // Check if local session directory exists
+      try {
+        await fs.access(localSessionPath);
+
+        // Remove all files in the session directory
+        const files = await fs.readdir(localSessionPath);
+        for (const file of files) {
+          const filePath = join(localSessionPath, file);
+          await fs.unlink(filePath);
+          logger.debug(`Deleted local session file: ${filePath}`);
+        }
+
+        // Remove the session directory
+        await fs.rmdir(localSessionPath);
+        logger.info(`Local session directory deleted: ${localSessionPath}`);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          // Only log error if it's not "file not found"
+          logger.warn(
+            `Local session directory not found or already deleted: ${localSessionPath}`
+          );
+        }
+      }
+    } catch (error) {
+      logger.error(
+        `Failed to cleanup local session files for ${sessionId}:`,
+        error
+      );
     }
 
     logger.info(`Session cleanup completed for ${sessionId}`);
@@ -1073,12 +1115,15 @@ class BaileysService {
         await this.handleConnectionUpdate(sessionId, update);
       } else if (connection === "open") {
         // Successfully reconnected
-        const socket = this.sessions.get(sessionId);
-        const phoneNumber = socket?.user?.id;
+        const recoveredSocket = this.sessions.get(sessionId);
+        const phoneNumber = recoveredSocket?.user?.id;
+        const displayName =
+          recoveredSocket?.user?.name || recoveredSocket?.user?.notify || null;
 
         this.updateSessionStatus(sessionId, {
           status: "connected",
           phoneNumber,
+          displayName,
           connectedAt: new Date().toISOString(),
           recoverySuccessful: true,
         });
@@ -1090,6 +1135,7 @@ class BaileysService {
         // Notify backend about successful recovery
         await this.notifyBackend("connected", sessionId, {
           phoneNumber,
+          displayName,
           isRecovered: true,
         });
 
