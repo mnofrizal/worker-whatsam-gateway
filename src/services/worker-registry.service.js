@@ -255,8 +255,10 @@ class WorkerRegistryService {
             case "initializing":
               status = "INIT";
               break;
-            case "disconnected":
             case "logged_out":
+              status = "LOGGED_OUT";
+              break;
+            case "disconnected":
             case "failed":
             default:
               status = "DISCONNECTED";
@@ -345,10 +347,26 @@ class WorkerRegistryService {
       return;
     }
 
-    try {
-      let endpoint;
-      let payload;
+    // Validate required parameters
+    if (!event || !sessionId) {
+      logger.error("Invalid parameters for notifyBackend:", {
+        event,
+        sessionId,
+        data,
+      });
+      return;
+    }
 
+    // Validate backend URL
+    if (!this.backendUrl) {
+      logger.warn("Backend URL not configured, skipping notification");
+      return;
+    }
+
+    let endpoint = null;
+    let payload = null;
+
+    try {
       if (event === "message_status") {
         // Message status webhook
         endpoint = `${this.backendUrl}/api/v1/webhooks/message-status`;
@@ -380,6 +398,9 @@ class WorkerRegistryService {
           case "session_deleted":
             status = "DISCONNECTED";
             break;
+          case "session_logged_out":
+            status = "DISCONNECTED";
+            break;
           case "reconnecting":
             status = "RECONNECTING";
             break;
@@ -408,6 +429,25 @@ class WorkerRegistryService {
           }
           // Always include displayName for CONNECTED status (even if null)
           payload.displayName = data.displayName || null;
+        } else if (event === "session_logged_out") {
+          // Include additional information for logged out sessions (using DISCONNECTED status)
+          if (data.phoneNumber) {
+            const formattedPhoneNumber = this.formatPhoneNumber(
+              data.phoneNumber
+            );
+            if (formattedPhoneNumber) {
+              payload.phoneNumber = formattedPhoneNumber;
+            }
+          }
+          if (data.displayName) {
+            payload.displayName = data.displayName;
+          }
+          if (data.reason) {
+            payload.reason = data.reason;
+          }
+          // Add logout-specific metadata
+          payload.loggedOutAt = new Date().toISOString();
+          payload.loggedOutFromPhone = true;
         }
 
         // Always include displayName field - use actual value if available, otherwise null
@@ -428,8 +468,34 @@ class WorkerRegistryService {
         // The backend will handle clearing these fields when status is DISCONNECTED
       }
 
+      // Log webhook request details before sending
+      logger.info("Sending webhook to backend:", {
+        sessionId,
+        event,
+        endpoint,
+        method: "POST",
+        payload: JSON.stringify(payload, null, 2),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.workerAuthToken ? this.workerAuthToken.substring(0, 10) + "..." : "NOT_SET"}`,
+        },
+        timeout: 5000,
+      });
+
+      // Validate endpoint and payload before sending
+      if (!endpoint || !payload) {
+        throw new Error(
+          `Invalid webhook configuration: endpoint=${endpoint}, payload=${!!payload}`
+        );
+      }
+
+      // Validate auth token
+      if (!this.workerAuthToken) {
+        throw new Error("Worker auth token not configured");
+      }
+
       // Send webhook request
-      await axios.post(endpoint, payload, {
+      const response = await axios.post(endpoint, payload, {
         timeout: 5000,
         headers: {
           "Content-Type": "application/json",
@@ -437,20 +503,40 @@ class WorkerRegistryService {
         },
       });
 
-      logger.debug("Webhook sent successfully:", {
+      logger.info("Webhook sent successfully:", {
         sessionId,
+        event,
         status: payload.status || event,
         endpoint,
+        method: "POST",
+        responseStatus: response.status,
+        responseData: response.data,
         phoneNumber: payload.phoneNumber || "N/A",
         displayName: payload.displayName || "N/A",
       });
     } catch (error) {
       logger.error("Failed to send webhook:", {
-        error: error.message,
         sessionId,
         event,
-        status: error.response?.status,
+        endpoint: endpoint || "UNDEFINED",
+        method: "POST",
+        payload: payload ? JSON.stringify(payload, null, 2) : "UNDEFINED",
+        error: error.message,
+        errorCode: error.code,
+        httpStatus: error.response?.status,
         responseData: error.response?.data,
+        requestConfig: {
+          timeout: 5000,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.workerAuthToken ? this.workerAuthToken.substring(0, 10) + "..." : "NOT_SET"}`,
+          },
+        },
+        isNetworkError:
+          error.code === "ECONNREFUSED" ||
+          error.code === "ENOTFOUND" ||
+          error.code === "ETIMEDOUT",
+        backendUrl: this.backendUrl,
       });
     }
   }
@@ -587,20 +673,42 @@ class WorkerRegistryService {
     }
 
     try {
-      await axios.delete(`${this.backendUrl}/api/v1/workers/${this.workerId}`, {
+      const unregisterPayload = {
+        workerId: this.workerId,
+        endpoint: this.workerEndpoint,
+      };
+
+      logger.info("Attempting to unregister worker from backend:", {
+        workerId: this.workerId,
+        workerEndpoint: this.workerEndpoint,
+        backendEndpoint: `${this.backendUrl}/api/v1/workers/unregister`,
+        authToken: this.workerAuthToken
+          ? `${this.workerAuthToken.substring(0, 10)}...`
+          : "NOT_SET",
+        payload: unregisterPayload,
+      });
+
+      await axios.delete(`${this.backendUrl}/api/v1/workers/unregister`, {
         timeout: 5000,
         headers: {
+          "Content-Type": "application/json",
           Authorization: `Bearer ${this.workerAuthToken}`,
         },
+        data: unregisterPayload,
       });
 
       logger.info("Worker unregistered successfully", {
         workerId: this.workerId,
+        endpoint: this.workerEndpoint,
       });
     } catch (error) {
       logger.error("Failed to unregister worker:", {
         error: error.message,
         workerId: this.workerId,
+        workerEndpoint: this.workerEndpoint,
+        status: error.response?.status,
+        responseData: error.response?.data,
+        backendEndpoint: `${this.backendUrl}/api/v1/workers/unregister`,
       });
     }
   }

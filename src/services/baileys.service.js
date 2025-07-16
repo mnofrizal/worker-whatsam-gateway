@@ -187,12 +187,36 @@ class BaileysService {
             autoDisconnectIn: 30, // seconds
           });
 
-          // Notify backend about max attempts reached
-          await this.notifyBackend("session_auto_disconnected", sessionId, {
+          // Prepare payload for backend notification
+          const maxAttemptsPayload = {
             qrCode: qr,
             attempts: newAttempts,
             maxAttempts: 3,
             autoDisconnectIn: 30,
+          };
+
+          logger.info(`Sending QR webhook to backend (max attempts reached):`, {
+            sessionId,
+            event: "session_auto_disconnected",
+            endpoint: `${global.services?.workerRegistry?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+            payload: JSON.stringify(maxAttemptsPayload, null, 2),
+            qrLength: qr.length,
+            qrPreview: qr.substring(0, 50) + "...",
+            attempts: newAttempts,
+            maxAttempts: 3,
+          });
+
+          // Notify backend about max attempts reached
+          await this.notifyBackend(
+            "session_auto_disconnected",
+            sessionId,
+            maxAttemptsPayload
+          );
+
+          logger.info(`QR webhook sent successfully (max attempts reached):`, {
+            sessionId,
+            event: "session_auto_disconnected",
+            attempts: newAttempts,
           });
 
           // Auto-disconnect after 30 seconds to allow user to see the final QR
@@ -230,9 +254,29 @@ class BaileysService {
             qrAttempts: newAttempts,
           });
 
-          // Notify backend about QR code ready
-          await this.notifyBackend("qr_ready", sessionId, {
+          // Prepare payload for backend notification
+          const qrReadyPayload = {
             qrCode: qr, // Raw QR string
+            attempts: newAttempts,
+          };
+
+          logger.info(`Sending QR webhook to backend (QR ready):`, {
+            sessionId,
+            event: "qr_ready",
+            endpoint: `${global.services?.workerRegistry?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+            payload: JSON.stringify(qrReadyPayload, null, 2),
+            qrLength: qr.length,
+            qrPreview: qr.substring(0, 50) + "...",
+            attempts: newAttempts,
+            maxAttempts: 3,
+          });
+
+          // Notify backend about QR code ready
+          await this.notifyBackend("qr_ready", sessionId, qrReadyPayload);
+
+          logger.info(`QR webhook sent successfully (QR ready):`, {
+            sessionId,
+            event: "qr_ready",
             attempts: newAttempts,
           });
         }
@@ -242,19 +286,95 @@ class BaileysService {
         // Check if this was a manual disconnection
         const isManualDisconnection = this.manualDisconnections.has(sessionId);
 
-        const shouldReconnect =
-          !isManualDisconnection &&
-          lastDisconnect?.error?.output?.statusCode !==
-            DisconnectReason.loggedOut;
+        // Check if session was logged out from phone (unlinked WhatsApp app)
+        // Multiple conditions can indicate logout from phone
+        const isLoggedOutFromPhone =
+          lastDisconnect?.error?.output?.statusCode ===
+            DisconnectReason.loggedOut ||
+          (lastDisconnect?.error?.message &&
+            (lastDisconnect.error.message.includes(
+              "Stream Errored (conflict)"
+            ) ||
+              lastDisconnect.error.message.includes("conflict") ||
+              lastDisconnect.error.message.includes("logged out")));
+
+        const shouldReconnect = !isManualDisconnection && !isLoggedOutFromPhone;
 
         logger.info(
-          `Session ${sessionId} closed. Manual: ${isManualDisconnection}, Should reconnect: ${shouldReconnect}`
+          `Session ${sessionId} closed. Manual: ${isManualDisconnection}, LoggedOut: ${isLoggedOutFromPhone}, Should reconnect: ${shouldReconnect}`,
+          {
+            disconnectReason: lastDisconnect?.error?.output?.statusCode,
+            disconnectMessage: lastDisconnect?.error?.message,
+            logoutDetectionDetails: {
+              statusCodeMatch:
+                lastDisconnect?.error?.output?.statusCode ===
+                DisconnectReason.loggedOut,
+              messageContainsConflict: lastDisconnect?.error?.message?.includes(
+                "Stream Errored (conflict)"
+              ),
+              messageContainsConflictKeyword:
+                lastDisconnect?.error?.message?.includes("conflict"),
+              messageContainsLoggedOut:
+                lastDisconnect?.error?.message?.includes("logged out"),
+            },
+          }
         );
 
         // Remove from manual disconnections set
         this.manualDisconnections.delete(sessionId);
 
-        if (shouldReconnect) {
+        if (isLoggedOutFromPhone) {
+          // Handle logout from phone (unlinked WhatsApp app)
+          logger.warn(
+            `Session ${sessionId} was logged out from phone (unlinked WhatsApp app)`
+          );
+
+          // Get current session info before cleanup
+          const sessionInfo = this.sessionStatus.get(sessionId);
+          const phoneNumber = sessionInfo?.phoneNumber;
+          const displayName = sessionInfo?.displayName;
+
+          // Update session status to logged out
+          this.updateSessionStatus(sessionId, {
+            status: "logged_out",
+            lastDisconnect: lastDisconnect?.error?.message,
+            loggedOutFromPhone: true,
+            loggedOutAt: new Date().toISOString(),
+          });
+
+          // Send webhook notification to backend about logout
+          logger.info(
+            `Sending logout webhook to backend for session ${sessionId}:`,
+            {
+              sessionId,
+              event: "session_logged_out",
+              endpoint: `${global.services?.workerRegistry?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+              reason: "logged_out_from_phone",
+              phoneNumber: phoneNumber || "N/A",
+              displayName: displayName || "N/A",
+            }
+          );
+
+          await this.notifyBackend("session_logged_out", sessionId, {
+            reason: "logged_out_from_phone",
+            phoneNumber,
+            displayName,
+            timestamp: new Date().toISOString(),
+          });
+
+          logger.info(
+            `Logout webhook sent successfully for session ${sessionId}`
+          );
+
+          // Clean up session completely since it was logged out
+          this.cleanupSession(sessionId).catch((error) => {
+            logger.error(
+              `Failed to cleanup logged out session ${sessionId}:`,
+              error
+            );
+          });
+        } else if (shouldReconnect) {
+          // Handle reconnection for temporary disconnections
           this.updateSessionStatus(sessionId, {
             status: "reconnecting",
             lastDisconnect: lastDisconnect?.error?.message,
@@ -267,15 +387,18 @@ class BaileysService {
             });
           }, 5000);
         } else {
+          // Handle manual disconnections
           this.updateSessionStatus(sessionId, {
-            status: isManualDisconnection ? "disconnected" : "logged_out",
+            status: "disconnected",
             lastDisconnect: lastDisconnect?.error?.message,
+            manualDisconnection: isManualDisconnection,
           });
 
-          // Only clean up session if it was logged out (not manual disconnect)
-          if (!isManualDisconnection) {
-            this.cleanupSession(sessionId).catch((error) => {
-              logger.error(`Failed to cleanup session ${sessionId}:`, error);
+          // Send disconnection webhook for manual disconnects
+          if (isManualDisconnection) {
+            await this.notifyBackend("disconnected", sessionId, {
+              reason: "manual_disconnection",
+              timestamp: new Date().toISOString(),
             });
           }
         }
@@ -1157,12 +1280,93 @@ class BaileysService {
         logger.info(`Recovered session ${sessionId} connected successfully`);
       } else if (connection === "close") {
         // Handle disconnection for recovered session
-        const shouldReconnect =
-          !this.manualDisconnections.has(sessionId) &&
-          lastDisconnect?.error?.output?.statusCode !==
-            DisconnectReason.loggedOut;
+        const isManualDisconnection = this.manualDisconnections.has(sessionId);
+        const isLoggedOutFromPhone =
+          lastDisconnect?.error?.output?.statusCode ===
+            DisconnectReason.loggedOut ||
+          (lastDisconnect?.error?.message &&
+            (lastDisconnect.error.message.includes(
+              "Stream Errored (conflict)"
+            ) ||
+              lastDisconnect.error.message.includes("conflict") ||
+              lastDisconnect.error.message.includes("logged out")));
 
-        if (shouldReconnect) {
+        const shouldReconnect = !isManualDisconnection && !isLoggedOutFromPhone;
+
+        logger.info(
+          `Recovered session ${sessionId} closed. Manual: ${isManualDisconnection}, LoggedOut: ${isLoggedOutFromPhone}, Should reconnect: ${shouldReconnect}`,
+          {
+            disconnectReason: lastDisconnect?.error?.output?.statusCode,
+            disconnectMessage: lastDisconnect?.error?.message,
+            logoutDetectionDetails: {
+              statusCodeMatch:
+                lastDisconnect?.error?.output?.statusCode ===
+                DisconnectReason.loggedOut,
+              messageContainsConflict: lastDisconnect?.error?.message?.includes(
+                "Stream Errored (conflict)"
+              ),
+              messageContainsConflictKeyword:
+                lastDisconnect?.error?.message?.includes("conflict"),
+              messageContainsLoggedOut:
+                lastDisconnect?.error?.message?.includes("logged out"),
+            },
+          }
+        );
+
+        if (isLoggedOutFromPhone) {
+          // Handle logout from phone for recovered session
+          logger.warn(
+            `Recovered session ${sessionId} was logged out from phone (unlinked WhatsApp app)`
+          );
+
+          // Get current session info before cleanup
+          const sessionInfo = this.sessionStatus.get(sessionId);
+          const phoneNumber = sessionInfo?.phoneNumber;
+          const displayName = sessionInfo?.displayName;
+
+          // Update session status to logged out
+          this.updateSessionStatus(sessionId, {
+            status: "logged_out",
+            lastDisconnect: lastDisconnect?.error?.message,
+            loggedOutFromPhone: true,
+            loggedOutAt: new Date().toISOString(),
+            recoveryFailed: true,
+          });
+
+          // Send webhook notification to backend about logout
+          logger.info(
+            `Sending logout webhook to backend for recovered session ${sessionId}:`,
+            {
+              sessionId,
+              event: "session_logged_out",
+              endpoint: `${global.services?.workerRegistry?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+              reason: "logged_out_from_phone",
+              phoneNumber: phoneNumber || "N/A",
+              displayName: displayName || "N/A",
+              isRecovered: true,
+            }
+          );
+
+          await this.notifyBackend("session_logged_out", sessionId, {
+            reason: "logged_out_from_phone",
+            phoneNumber,
+            displayName,
+            isRecovered: true,
+            timestamp: new Date().toISOString(),
+          });
+
+          logger.info(
+            `Logout webhook sent successfully for recovered session ${sessionId}`
+          );
+
+          // Clean up logged out recovered session
+          this.cleanupSession(sessionId).catch((error) => {
+            logger.error(
+              `Failed to cleanup logged out recovered session ${sessionId}:`,
+              error
+            );
+          });
+        } else if (shouldReconnect) {
           logger.info(
             `Recovered session ${sessionId} disconnected, will attempt reconnection`
           );
@@ -1188,7 +1392,17 @@ class BaileysService {
             status: "disconnected",
             lastDisconnect: lastDisconnect?.error?.message,
             recoveryFailed: true,
+            manualDisconnection: isManualDisconnection,
           });
+
+          // Send disconnection webhook for manual disconnects
+          if (isManualDisconnection) {
+            await this.notifyBackend("disconnected", sessionId, {
+              reason: "manual_disconnection",
+              isRecovered: true,
+              timestamp: new Date().toISOString(),
+            });
+          }
 
           // Clean up failed recovery session
           this.cleanupSession(sessionId).catch((error) => {

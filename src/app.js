@@ -5,10 +5,9 @@ import multer from "multer";
 
 import config from "./config/environment.js";
 import logger from "./utils/logger.js";
-import { ApiResponse, Utils } from "./utils/helpers.js";
+import { ApiResponse } from "./utils/helpers.js";
 import errorHandler from "./middleware/error-handler.middleware.js";
 import { generalRateLimit } from "./middleware/rate-limit.middleware.js";
-// Routes will be imported after middleware setup
 
 // Import services
 import BaileysService from "./services/baileys.service.js";
@@ -22,438 +21,447 @@ import SessionController from "./controllers/session.controller.js";
 import MessageController from "./controllers/message.controller.js";
 import HealthController from "./controllers/health.controller.js";
 
-class WhatsAppWorker {
-  constructor() {
-    this.app = express();
-    this.config = config;
-    this.port = config.server.port;
-    this.services = {};
-    this.controllers = {};
+// Application state
+const appState = {
+  app: null,
+  server: null,
+  services: {},
+  controllers: {},
+  isShuttingDown: false,
+};
 
-    this.initializeServices();
-    this.setupMiddleware();
-    this.setupErrorHandling();
-  }
+// Constants
+const PORT = config.server.port;
+const SERVICE_INIT_ORDER = [
+  "storage",
+  "database",
+  "redis",
+  "baileys",
+  "workerRegistry",
+];
+const SHUTDOWN_ORDER = [
+  "workerRegistry",
+  "baileys",
+  "redis",
+  "storage",
+  "database",
+];
 
-  initializeServices() {
-    logger.info("Initializing services...");
+// ===== UTILITY FUNCTIONS =====
 
-    // Initialize core services
-    this.services.baileys = new BaileysService();
-    this.services.storage = new StorageService();
-    this.services.database = new DatabaseService();
-    this.services.redis = new RedisService();
-    this.services.workerRegistry = new WorkerRegistryService();
+const createServiceInstances = () => ({
+  baileys: new BaileysService(),
+  storage: new StorageService(),
+  database: new DatabaseService(),
+  redis: new RedisService(),
+  workerRegistry: new WorkerRegistryService(),
+});
 
-    // Make services available globally for cross-service communication
-    global.services = this.services;
-  }
+const createControllerInstances = (services) => ({
+  session: new SessionController(
+    services.baileys,
+    services.storage,
+    services.database,
+    services.redis,
+    services.workerRegistry
+  ),
+  message: new MessageController(
+    services.baileys,
+    services.storage,
+    services.database,
+    services.redis,
+    services.workerRegistry
+  ),
+  health: new HealthController(
+    services.baileys,
+    services.storage,
+    services.database,
+    services.redis,
+    services.workerRegistry
+  ),
+});
 
-  initializeControllers() {
-    logger.info("Initializing controllers...");
+const createHelmetConfig = () => ({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+});
 
-    // Initialize controllers with service dependencies
-    this.controllers.session = new SessionController(
-      this.services.baileys,
-      this.services.storage,
-      this.services.database,
-      this.services.redis,
-      this.services.workerRegistry
-    );
+const createCorsConfig = () => ({
+  origin: config.security.corsOrigin,
+  credentials: true,
+});
 
-    this.controllers.message = new MessageController(
-      this.services.baileys,
-      this.services.storage,
-      this.services.database,
-      this.services.redis,
-      this.services.workerRegistry
-    );
-
-    this.controllers.health = new HealthController(
-      this.services.baileys,
-      this.services.storage,
-      this.services.database,
-      this.services.redis,
-      this.services.workerRegistry
-    );
-
-    // Make controllers available globally for routes
-    global.controllers = this.controllers;
-  }
-
-  setupMiddleware() {
-    // Security middleware
-    if (this.config.production.enableHelmet) {
-      this.app.use(
-        helmet({
-          contentSecurityPolicy: {
-            directives: {
-              defaultSrc: ["'self'"],
-              styleSrc: ["'self'", "'unsafe-inline'"],
-              scriptSrc: ["'self'"],
-              imgSrc: ["'self'", "data:", "https:"],
-            },
-          },
-        })
-      );
-    }
-
-    // CORS configuration
-    if (this.config.development.enableCors) {
-      this.app.use(
-        cors({
-          origin: this.config.security.corsOrigin,
-          credentials: true,
-        })
-      );
-    }
-
-    // Trust proxy if configured
-    if (this.config.security.trustProxy) {
-      this.app.set("trust proxy", true);
-    }
-
-    // Rate limiting configuration
-    const rateLimitingEnabled =
-      this.config.server.nodeEnv === "production" &&
-      process.env.RATE_LIMITING_ENABLED !== "false";
-
-    if (rateLimitingEnabled) {
-      this.app.use(generalRateLimit);
-      logger.info("Rate limiting enabled");
+const createMulterConfig = () => ({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: config.fileUpload.maxFileSize },
+  fileFilter: (req, file, cb) => {
+    if (config.fileUpload.allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
     } else {
-      logger.info(
-        `Rate limiting disabled (NODE_ENV: ${this.config.server.nodeEnv}, RATE_LIMITING_ENABLED: ${process.env.RATE_LIMITING_ENABLED || "not set"})`
-      );
+      const error = new Error(`File type ${file.mimetype} not allowed`);
+      error.code = "INVALID_FILE_TYPE";
+      cb(error, false);
+    }
+  },
+});
+
+const createRootRouteHandler = () => (req, res) => {
+  const response = ApiResponse.createSuccessResponse(
+    {
+      name: "WhatsApp Gateway Worker",
+      version: process.env.npm_package_version || "1.0.0",
+      workerId: config.server.workerId,
+      status: "running",
+      uptime: process.uptime(),
+      environment: config.server.nodeEnv,
+      maxSessions: config.server.maxSessions,
+      endpoint: config.server.workerEndpoint,
+    },
+    "WhatsApp Gateway Worker is running"
+  );
+  res.json(response);
+};
+
+const create404Handler = () => (req, res) => {
+  logger.warn("404 - Endpoint not found", {
+    path: req.originalUrl,
+    method: req.method,
+    ip: req.ip,
+    userAgent: req.get("User-Agent"),
+  });
+
+  const response = ApiResponse.createNotFoundResponse(
+    `Endpoint not found: ${req.method} ${req.originalUrl}`
+  );
+  res.status(404).json(response);
+};
+
+const createRequestLogger = () => (req, res, next) => {
+  logger.info(`${req.method} ${req.path}`, {
+    ip: req.ip,
+    userAgent: req.get("User-Agent"),
+    timestamp: new Date().toISOString(),
+  });
+  next();
+};
+
+// ===== INITIALIZATION FUNCTIONS =====
+
+const initializeServices = () => {
+  logger.info("Initializing services...");
+  appState.services = createServiceInstances();
+  global.services = appState.services;
+};
+
+const initializeControllers = () => {
+  logger.info("Initializing controllers...");
+  appState.controllers = createControllerInstances(appState.services);
+  global.controllers = appState.controllers;
+};
+
+const setupSecurityMiddleware = () => {
+  if (config.production.enableHelmet) {
+    appState.app.use(helmet(createHelmetConfig()));
+  }
+
+  if (config.development.enableCors) {
+    appState.app.use(cors(createCorsConfig()));
+  }
+
+  if (config.security.trustProxy) {
+    appState.app.set("trust proxy", true);
+  }
+};
+
+const setupRateLimiting = () => {
+  const rateLimitingEnabled =
+    config.server.nodeEnv === "production" &&
+    process.env.RATE_LIMITING_ENABLED !== "false";
+
+  if (rateLimitingEnabled) {
+    appState.app.use(generalRateLimit);
+    logger.info("Rate limiting enabled");
+  } else {
+    logger.info(
+      `Rate limiting disabled (NODE_ENV: ${config.server.nodeEnv}, RATE_LIMITING_ENABLED: ${process.env.RATE_LIMITING_ENABLED || "not set"})`
+    );
+  }
+};
+
+const setupBodyParsing = () => {
+  const jsonConfig = { limit: config.fileUpload.maxRequestSize };
+  const urlencodedConfig = {
+    extended: true,
+    limit: config.fileUpload.maxRequestSize,
+  };
+
+  appState.app.use(express.json(jsonConfig));
+  appState.app.use(express.urlencoded(urlencodedConfig));
+};
+
+const setupFileUpload = () => {
+  const upload = multer(createMulterConfig());
+  global.upload = upload;
+};
+
+const setupMiddleware = () => {
+  setupSecurityMiddleware();
+  setupRateLimiting();
+  setupBodyParsing();
+  setupFileUpload();
+  appState.app.use(createRequestLogger());
+};
+
+const setupHealthEndpoints = () => {
+  const { health } = appState.controllers;
+  appState.app.get("/health", health.getHealth.bind(health));
+  appState.app.get("/metrics", health.getMetrics.bind(health));
+  appState.app.get("/ready", health.getReadiness.bind(health));
+  appState.app.get("/live", health.getLiveness.bind(health));
+};
+
+const setupRoutes = async () => {
+  const { default: routes } = await import("./routes/index.js");
+
+  appState.app.get("/", createRootRouteHandler());
+  appState.app.use("/api", routes);
+  setupHealthEndpoints();
+  appState.app.use("*", create404Handler());
+};
+
+const setupErrorHandling = () => {
+  appState.app.use(errorHandler);
+};
+
+// ===== SERVICE MANAGEMENT =====
+
+const initializeAllServices = async () => {
+  logger.info("Initializing all services...");
+
+  try {
+    for (const serviceName of SERVICE_INIT_ORDER) {
+      await appState.services[serviceName].initialize();
+      logger.info(`${serviceName} service initialized`);
     }
 
-    // Body parsing middleware
-    this.app.use(
-      express.json({
-        limit: this.config.fileUpload.maxRequestSize,
-      })
-    );
-    this.app.use(
-      express.urlencoded({
-        extended: true,
-        limit: this.config.fileUpload.maxRequestSize,
-      })
-    );
+    // Set service dependencies
+    appState.services.workerRegistry.setServices(appState.services.baileys);
+    logger.info("Worker Registry service dependencies set");
+    logger.info("All services initialized successfully");
+  } catch (error) {
+    logger.error("Service initialization failed:", error);
+    throw error;
+  }
+};
 
-    // File upload middleware
-    const upload = multer({
-      storage: multer.memoryStorage(),
-      limits: {
-        fileSize: this.config.fileUpload.maxFileSize,
-      },
-      fileFilter: (req, file, cb) => {
-        if (this.config.fileUpload.allowedTypes.includes(file.mimetype)) {
-          cb(null, true);
-        } else {
-          const error = new Error(`File type ${file.mimetype} not allowed`);
-          error.code = "INVALID_FILE_TYPE";
-          cb(error, false);
+const shutdownAllServices = async () => {
+  logger.info("Shutting down services...");
+
+  for (const serviceName of SHUTDOWN_ORDER) {
+    const service = appState.services[serviceName];
+    if (service) {
+      try {
+        if (service.shutdown) {
+          await service.shutdown();
+        } else if (service.close) {
+          await service.close();
         }
-      },
-    });
-
-    // Make upload middleware available globally
-    global.upload = upload;
-
-    // Request logging
-    this.app.use((req, res, next) => {
-      logger.info(`${req.method} ${req.path}`, {
-        ip: req.ip,
-        userAgent: req.get("User-Agent"),
-        timestamp: new Date().toISOString(),
-      });
-      next();
-    });
-  }
-
-  async setupRoutes() {
-    // Import routes after middleware is set up
-    const { default: routes } = await import("./routes/index.js");
-
-    // Root route
-    this.app.get("/", (req, res) => {
-      const response = ApiResponse.createSuccessResponse(
-        {
-          name: "WhatsApp Gateway Worker",
-          version: process.env.npm_package_version || "1.0.0",
-          workerId: this.config.server.workerId,
-          status: "running",
-          uptime: process.uptime(),
-          environment: this.config.server.nodeEnv,
-          maxSessions: this.config.server.maxSessions,
-          endpoint: this.config.server.workerEndpoint,
-        },
-        "WhatsApp Gateway Worker is running"
-      );
-
-      res.json(response);
-    });
-
-    // API routes
-    this.app.use("/api", routes);
-
-    // Direct health endpoints (for load balancers)
-    this.app.get(
-      "/health",
-      this.controllers.health.getHealth.bind(this.controllers.health)
-    );
-    this.app.get(
-      "/metrics",
-      this.controllers.health.getMetrics.bind(this.controllers.health)
-    );
-    this.app.get(
-      "/ready",
-      this.controllers.health.getReadiness.bind(this.controllers.health)
-    );
-    this.app.get(
-      "/live",
-      this.controllers.health.getLiveness.bind(this.controllers.health)
-    );
-
-    // 404 handler
-    this.app.use("*", (req, res) => {
-      logger.warn("404 - Endpoint not found", {
-        path: req.originalUrl,
-        method: req.method,
-        ip: req.ip,
-        userAgent: req.get("User-Agent"),
-      });
-
-      const response = ApiResponse.createNotFoundResponse(
-        `Endpoint not found: ${req.method} ${req.originalUrl}`
-      );
-
-      res.status(404).json(response);
-    });
-  }
-
-  setupErrorHandling() {
-    this.app.use(errorHandler);
-  }
-
-  async start() {
-    try {
-      // Initialize services
-      await this.initializeAllServices();
-
-      // Initialize controllers
-      this.initializeControllers();
-
-      // Setup routes after controllers are ready
-      await this.setupRoutes();
-
-      // Start server and wait for it to be ready
-      await new Promise((resolve, reject) => {
-        this.server = this.app.listen(this.port, (error) => {
-          if (error) {
-            reject(error);
-          } else {
-            logger.info(`WhatsApp Worker started on port ${this.port}`, {
-              workerId: this.config.server.workerId,
-              environment: this.config.server.nodeEnv,
-              maxSessions: this.config.server.maxSessions,
-              endpoint: this.config.server.workerEndpoint,
-            });
-            resolve();
-          }
-        });
-      });
-
-      // Register worker with backend AFTER server is listening
-      await this.registerWithBackend();
-
-      // Start session recovery process AFTER worker registration
-      await this.startSessionRecovery();
-
-      // Setup graceful shutdown
-      this.setupGracefulShutdown();
-    } catch (error) {
-      logger.error("Failed to start WhatsApp Worker:", error);
-      process.exit(1);
+        logger.info(`${serviceName} service shut down`);
+      } catch (error) {
+        logger.error(`Error shutting down ${serviceName} service:`, error);
+      }
     }
   }
+};
 
-  async initializeAllServices() {
-    logger.info("Initializing all services...");
+// ===== BACKEND INTEGRATION =====
 
-    try {
-      // Initialize storage service
-      await this.services.storage.initialize();
-      logger.info("Storage service initialized");
+const registerWithBackend = async () => {
+  if (!config.backend.url) {
+    logger.warn("BACKEND_URL not configured, skipping worker registration");
+    return null;
+  }
 
-      // Initialize database service
-      await this.services.database.initialize();
-      logger.info("Database service initialized");
+  try {
+    logger.info("Starting worker registration with backend", {
+      backendUrl: config.backend.url,
+      workerId: config.server.workerId,
+    });
 
-      // Initialize Redis service
-      await this.services.redis.initialize();
-      logger.info("Redis service initialized");
+    return await appState.services.workerRegistry.startRegistration();
+  } catch (error) {
+    logger.error("Failed to register with backend:", error);
 
-      // Initialize Baileys service
-      await this.services.baileys.initialize();
-      logger.info("Baileys service initialized");
-
-      // Initialize Worker Registry service
-      await this.services.workerRegistry.initialize();
-      logger.info("Worker Registry service initialized");
-
-      // Set service dependencies for Worker Registry
-      this.services.workerRegistry.setServices(this.services.baileys);
-      logger.info("Worker Registry service dependencies set");
-
-      logger.info("All services initialized successfully");
-    } catch (error) {
-      logger.error("Service initialization failed:", error);
+    if (config.server.nodeEnv === "production") {
       throw error;
     }
+    return null;
   }
+};
 
-  async registerWithBackend() {
-    try {
-      if (this.config.backend.url) {
-        // Start worker registration after server is listening
-        logger.info("Starting worker registration with backend", {
-          backendUrl: this.config.backend.url,
-          workerId: this.config.server.workerId,
-        });
+const startSessionRecovery = async () => {
+  try {
+    logger.info("Starting session recovery process...");
 
-        const registrationResult =
-          await this.services.workerRegistry.startRegistration();
-        return registrationResult;
-      } else {
-        logger.warn("BACKEND_URL not configured, skipping worker registration");
-        return null;
-      }
-    } catch (error) {
-      logger.error("Failed to register with backend:", error);
-      // Don't exit on registration failure in development
-      if (this.config.server.nodeEnv === "production") {
-        throw error;
-      }
-      return null;
+    if (!config.sessionRecovery.enabled) {
+      logger.info("Session recovery disabled, skipping recovery process");
+      return;
     }
-  }
 
-  async startSessionRecovery() {
-    try {
-      logger.info("Starting session recovery process...");
+    if (!appState.services.workerRegistry.isInitialized()) {
+      logger.warn("Worker registry not initialized, skipping session recovery");
+      return;
+    }
 
-      // Check if session recovery is enabled
-      if (!this.config.sessionRecovery.enabled) {
-        logger.info("Session recovery disabled, skipping recovery process");
-        return;
-      }
-
-      // Only attempt recovery if backend registration was successful
-      if (!this.services.workerRegistry.isInitialized()) {
-        logger.warn(
-          "Worker registry not initialized, skipping session recovery"
-        );
-        return;
-      }
-
-      // Check if recovery is required from backend response
-      if (!this.services.workerRegistry.isRecoveryRequired()) {
-        logger.info(
-          "Backend indicates no recovery required, skipping session recovery"
-        );
-        return;
-      }
-
-      // Add delay to allow backend to be fully ready
-      const recoveryDelay = this.config.sessionRecovery.startupDelay;
+    if (!appState.services.workerRegistry.isRecoveryRequired()) {
       logger.info(
-        `Waiting ${recoveryDelay}ms before starting session recovery...`
+        "Backend indicates no recovery required, skipping session recovery"
       );
-      await new Promise((resolve) => setTimeout(resolve, recoveryDelay));
-
-      // Start session recovery
-      const recoveryResult =
-        await this.services.baileys.loadPersistedSessions();
-
-      if (recoveryResult.success) {
-        logger.info("Session recovery completed successfully", {
-          totalSessions: recoveryResult.totalSessions,
-          recoveredSessions: recoveryResult.recoveredSessions,
-          failedSessions: recoveryResult.failedSessions,
-        });
-      } else {
-        logger.warn("Session recovery completed with issues", recoveryResult);
-      }
-    } catch (error) {
-      logger.error("Session recovery process failed:", error);
-      // Don't throw error to allow worker to continue without recovery
-      logger.warn("Worker will continue without session recovery");
+      return;
     }
+
+    const recoveryDelay = config.sessionRecovery.startupDelay;
+    logger.info(
+      `Waiting ${recoveryDelay}ms before starting session recovery...`
+    );
+    await new Promise((resolve) => setTimeout(resolve, recoveryDelay));
+
+    const recoveryResult =
+      await appState.services.baileys.loadPersistedSessions();
+
+    if (recoveryResult.success) {
+      logger.info("Session recovery completed successfully", {
+        totalSessions: recoveryResult.totalSessions,
+        recoveredSessions: recoveryResult.recoveredSessions,
+        failedSessions: recoveryResult.failedSessions,
+      });
+    } else {
+      logger.warn("Session recovery completed with issues", recoveryResult);
+    }
+  } catch (error) {
+    logger.error("Session recovery process failed:", error);
+    logger.warn("Worker will continue without session recovery");
+  }
+};
+
+// ===== SHUTDOWN MANAGEMENT =====
+
+const gracefulShutdown = async (signal) => {
+  if (appState.isShuttingDown) {
+    logger.warn("Shutdown already in progress, ignoring signal:", signal);
+    return;
   }
 
-  setupGracefulShutdown() {
-    const shutdown = async (signal) => {
-      logger.info(`Received ${signal}, starting graceful shutdown...`);
+  appState.isShuttingDown = true;
+  logger.info(`Received ${signal}, starting graceful shutdown...`);
 
-      try {
-        // Stop accepting new connections
-        if (this.server) {
-          this.server.close(() => {
-            logger.info("HTTP server closed");
-          });
-        }
+  try {
+    // Stop accepting new connections
+    if (appState.server) {
+      appState.server.close(() => {
+        logger.info("HTTP server closed");
+      });
+    }
 
-        // Shutdown services in reverse order
-        if (this.services.workerRegistry) {
-          await this.services.workerRegistry.shutdown();
-        }
+    await shutdownAllServices();
+    logger.info("Graceful shutdown completed");
+    process.exit(0);
+  } catch (error) {
+    logger.error("Error during shutdown:", error);
+    process.exit(1);
+  }
+};
 
-        if (this.services.baileys) {
-          await this.services.baileys.shutdown();
-        }
+const setupGracefulShutdown = () => {
+  const signals = ["SIGTERM", "SIGINT"];
+  signals.forEach((signal) => {
+    process.on(signal, () => gracefulShutdown(signal));
+  });
 
-        if (this.services.redis) {
-          await this.services.redis.close();
-        }
+  process.on("uncaughtException", (error) => {
+    logger.error("Uncaught Exception:", error);
+    gracefulShutdown("UNCAUGHT_EXCEPTION");
+  });
 
-        if (this.services.storage) {
-          await this.services.storage.close();
-        }
+  process.on("unhandledRejection", (reason, promise) => {
+    logger.error("Unhandled Rejection at:", promise, "reason:", reason);
+    gracefulShutdown("UNHANDLED_REJECTION");
+  });
+};
 
-        if (this.services.database) {
-          await this.services.database.close();
-        }
-
-        logger.info("Graceful shutdown completed");
-        process.exit(0);
-      } catch (error) {
-        logger.error("Error during shutdown:", error);
-        process.exit(1);
+const startServer = () => {
+  return new Promise((resolve, reject) => {
+    appState.server = appState.app.listen(PORT, (error) => {
+      if (error) {
+        reject(error);
+      } else {
+        logger.info(`WhatsApp Worker started on port ${PORT}`, {
+          workerId: config.server.workerId,
+          environment: config.server.nodeEnv,
+          maxSessions: config.server.maxSessions,
+          endpoint: config.server.workerEndpoint,
+        });
+        resolve();
       }
-    };
-
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT", () => shutdown("SIGINT"));
-
-    // Handle uncaught exceptions
-    process.on("uncaughtException", (error) => {
-      logger.error("Uncaught Exception:", error);
-      shutdown("UNCAUGHT_EXCEPTION");
     });
+  });
+};
 
-    process.on("unhandledRejection", (reason, promise) => {
-      logger.error("Unhandled Rejection at:", promise, "reason:", reason);
-      shutdown("UNHANDLED_REJECTION");
-    });
+// ===== MAIN APPLICATION FLOW =====
+
+const start = async () => {
+  try {
+    // Initialize Express app
+    appState.app = express();
+
+    // Initialize services and controllers
+    initializeServices();
+    setupMiddleware();
+    setupErrorHandling();
+
+    // Initialize all services
+    await initializeAllServices();
+    initializeControllers();
+
+    // Setup routes and start server
+    await setupRoutes();
+    await startServer();
+
+    // Post-startup tasks
+    await registerWithBackend();
+    await startSessionRecovery();
+    setupGracefulShutdown();
+  } catch (error) {
+    logger.error("Failed to start WhatsApp Worker:", error);
+    process.exit(1);
   }
-}
+};
 
-// Start the worker
-const worker = new WhatsAppWorker();
-worker.start().catch((error) => {
+// ===== APPLICATION ENTRY POINT =====
+
+start().catch((error) => {
   logger.error("Failed to start worker:", error);
   process.exit(1);
 });
 
-export default WhatsAppWorker;
+// ===== EXPORTS =====
+
+export {
+  start,
+  setupMiddleware,
+  setupRoutes,
+  initializeServices,
+  initializeControllers,
+  initializeAllServices,
+  registerWithBackend,
+  startSessionRecovery,
+  setupGracefulShutdown,
+};
+
+export const { app, services, controllers } = appState;
