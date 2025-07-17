@@ -57,8 +57,9 @@
 worker/
 ├── src/
 │   ├── controllers/
+│   │   ├── send.controller.js        # Message sending operations (all types)
 │   │   ├── session.controller.js     # Session CRUD operations
-│   │   ├── message.controller.js     # Message sending/receiving
+│   │   ├── message.controller.js     # Message statistics only
 │   │   ├── health.controller.js      # Health check endpoint
 │   │   └── webhook.controller.js     # Webhook notifications
 │   ├── services/
@@ -838,11 +839,12 @@ class MetricsCollector {
 ### Phase 4: Advanced Features (Week 4)
 
 - ✅ Media message support (image, document, video)
-- ✅ Message history dan storage
+- ✅ API endpoint restructuring (simplified send endpoint)
+- ✅ Controller separation (dedicated send controller)
 - ✅ Session migration preparation
 - ✅ Performance optimization
 - ✅ Resource monitoring implementation
-- **Deliverable:** Feature-complete worker
+- **Deliverable:** Feature-complete worker with clean API structure
 
 ### Phase 5: Production Ready (Week 5)
 

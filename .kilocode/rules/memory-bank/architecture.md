@@ -163,18 +163,22 @@ worker-whatsam-gateway/
 ### RESTful Endpoints Structure
 
 ```
-/session/
-├── POST /create                      # Create new WhatsApp session
-├── GET /{sessionId}/qr              # Get QR code for authentication
-├── GET /{sessionId}/status          # Get session status
-├── DELETE /{sessionId}              # Delete session
-└── POST /{sessionId}/send           # Send message
+/{sessionId}/send                    # Simplified send endpoint (all message types)
 
-/health                              # Worker health check
-/metrics                             # Worker performance metrics
-/webhooks/                           # Webhook endpoints (planned)
-├── POST /session-status             # Receive session updates from Backend
-└── POST /message-status             # Receive message updates from Backend
+/session/
+├── POST /create                     # Create new WhatsApp session
+├── GET /{sessionId}/qr             # Get QR code for authentication
+├── GET /{sessionId}/status         # Get session status
+└── DELETE /{sessionId}             # Delete session
+
+/message/
+└── GET /stats                      # Message statistics
+
+/health                             # Worker health check
+/metrics                            # Worker performance metrics
+/webhooks/                          # Webhook endpoints (planned)
+├── POST /session-status            # Receive session updates from Backend
+└── POST /message-status            # Receive message updates from Backend
 ```
 
 ### Request/Response Flow

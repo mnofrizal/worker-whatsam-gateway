@@ -52,7 +52,9 @@ export const ERROR_CODES = {
 
   // Validation Errors
   VALIDATION_FAILED: "VALIDATION_FAILED",
+  VALIDATION_ERROR: "VALIDATION_ERROR", // Added for message controller compatibility
   INVALID_INPUT: "INVALID_INPUT",
+  INVALID_REQUEST: "INVALID_REQUEST", // Added for message controller compatibility
   MISSING_REQUIRED_FIELD: "MISSING_REQUIRED_FIELD",
   INVALID_FORMAT: "INVALID_FORMAT",
 
@@ -131,6 +133,23 @@ export const MESSAGE_TYPES = {
   STICKER: "sticker",
   LOCATION: "location",
   CONTACT: "contact",
+  LINK: "link",
+  POLL: "poll",
+  SEEN: "seen",
+  TYPING_START: "typing_start",
+  TYPING_STOP: "typing_stop",
+  SYSTEM: "system", // Added for message controller logging
+};
+
+// Message management actions
+export const MESSAGE_ACTIONS = {
+  DELETE: "delete",
+  UNSEND: "unsend",
+  STAR: "star",
+  UNSTAR: "unstar",
+  EDIT: "edit",
+  REACTION: "reaction",
+  READ: "read",
 };
 
 /**

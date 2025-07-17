@@ -171,10 +171,32 @@
 
 ## 🔄 Recent Changes
 
-**Last Updated:** 2025-01-17 09:05 WIB
+**Last Updated:** 2025-07-17 22:41 WIB
 **Changes Made:**
 
-### Latest Updates (2025-01-17) - MAJOR REFACTORING
+### Latest Updates (2025-07-17) - API ENDPOINT RESTRUCTURING
+
+- **Send Endpoint Simplification:**
+  - ✅ Changed send endpoint from `POST /api/sessions/{sessionId}/send` to `POST /api/{sessionId}/send`
+  - ✅ Created dedicated [`src/controllers/send.controller.js`](src/controllers/send.controller.js) for message sending operations
+  - ✅ Moved complete `sendMessage` function (254 lines) from message controller to send controller
+  - ✅ Updated routing structure to use simplified endpoint pattern
+  - ✅ Fixed route conflicts and removed duplicate endpoints
+
+- **Controller Separation and Cleanup:**
+  - ✅ Removed message history functionality as requested (will be added later if needed)
+  - ✅ Cleaned up [`src/controllers/message.controller.js`](src/controllers/message.controller.js) to only handle message statistics
+  - ✅ Updated [`src/routes/index.js`](src/routes/index.js) to handle direct send endpoint at root level
+  - ✅ Removed duplicate send route from [`src/routes/session.routes.js`](src/routes/session.routes.js)
+  - ✅ Updated [`src/routes/message.routes.js`](src/routes/message.routes.js) to only handle stats endpoint
+
+- **API Architecture Foundation:**
+  - ✅ Established foundation for functional domain-based endpoint architecture
+  - ✅ Prepared structure for future message management endpoints (delete, revoke, star, unstar, edit, reaction)
+  - ✅ Maintained all message type support in send controller (text, image, document, video, audio, location, contact, link, poll, seen, typing indicators)
+  - ✅ Preserved human simulation features and comprehensive error handling
+
+### Previous Updates (2025-01-17) - MAJOR REFACTORING
 
 - **Complete Architecture Refactoring:**
   - ✅ Eliminated all class-based anti-patterns and mixed architectural styles
@@ -226,7 +248,7 @@
 - **Complete session recovery system implemented and working**
 - **Backend-Worker communication protocol established and tested**
 - **Fixed critical endpoint issue in worker-registry.service.js:**
-  - ✅ Correct endpoint: `/api/v1/workers/${workerId}/sessions/assigned`
+  - ✅ Correct endpoint: `/api/workers/${workerId}/sessions/assigned`
   - ✅ Correct response parsing: `response.data.data.sessions`
   - ✅ Backend successfully returning 1 session, worker now parsing correctly
 - **Session recovery flow fully functional:**

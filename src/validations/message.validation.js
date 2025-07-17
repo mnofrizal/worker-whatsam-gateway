@@ -98,6 +98,62 @@ const filenameSchema = Joi.string().max(255).required().messages({
   "any.required": "Filename is required for document messages",
 });
 
+// Link validation schema
+const linkSchema = Joi.object({
+  url: Joi.string().uri().required().messages({
+    "string.uri": "URL must be a valid URL",
+    "any.required": "URL is required for link messages",
+  }),
+  title: Joi.string().max(100).optional().messages({
+    "string.max": "Link title cannot exceed 100 characters",
+  }),
+  description: Joi.string().max(300).optional().messages({
+    "string.max": "Link description cannot exceed 300 characters",
+  }),
+  thumbnail: Joi.alternatives()
+    .try(
+      Joi.string().uri().messages({
+        "string.uri": "Thumbnail must be a valid URL",
+      }),
+      Joi.string()
+        .pattern(/^data:image\/(png|jpeg|jpg|gif|webp);base64,/)
+        .messages({
+          "string.pattern.base":
+            "Thumbnail must be a valid URL or base64 data URI (data:image/...;base64,...)",
+        })
+    )
+    .optional()
+    .messages({
+      "alternatives.match":
+        "Thumbnail must be either a valid URL or a base64 data URI",
+    }),
+});
+
+// Poll validation schema
+const pollSchema = Joi.object({
+  question: Joi.string().max(255).required().messages({
+    "string.max": "Poll question cannot exceed 255 characters",
+    "any.required": "Poll question is required",
+  }),
+  options: Joi.array()
+    .items(
+      Joi.string().max(100).messages({
+        "string.max": "Poll option cannot exceed 100 characters",
+      })
+    )
+    .min(2)
+    .max(12)
+    .required()
+    .messages({
+      "array.min": "Poll must have at least 2 options",
+      "array.max": "Poll cannot have more than 12 options",
+      "any.required": "Poll options are required",
+    }),
+  multipleAnswers: Joi.boolean().optional().default(false).messages({
+    "boolean.base": "multipleAnswers must be a boolean value",
+  }),
+});
+
 // Send message validation schema
 export const sendMessageSchema = Joi.object({
   to: phoneNumberSchema,
@@ -154,6 +210,30 @@ export const sendMessageSchema = Joi.object({
     otherwise: Joi.optional(),
   }),
 
+  // Link message fields
+  link: Joi.when("type", {
+    is: MESSAGE_TYPES.LINK,
+    then: linkSchema.required(),
+    otherwise: Joi.optional(),
+  }),
+
+  // Poll message fields
+  poll: Joi.when("type", {
+    is: MESSAGE_TYPES.POLL,
+    then: pollSchema.required(),
+    otherwise: Joi.optional(),
+  }),
+
+  // Message ID for seen receipts
+  messageId: Joi.when("type", {
+    is: MESSAGE_TYPES.SEEN,
+    then: Joi.string().required().messages({
+      "any.required": "Message ID is required for seen receipts",
+      "string.base": "Message ID must be a string",
+    }),
+    otherwise: Joi.optional(),
+  }),
+
   // Human simulation control
   humanSimulation: Joi.boolean().optional().default(true).messages({
     "boolean.base": "humanSimulation must be a boolean value",
@@ -165,39 +245,6 @@ export const sendMessageSchema = Joi.object({
 // Session ID parameter validation schema
 export const sessionIdParamSchema = Joi.object({
   sessionId: sessionIdSchema,
-});
-
-// Message history query validation schema
-export const messageHistoryQuerySchema = Joi.object({
-  contact: phoneNumberSchema.optional(),
-  limit: Joi.number()
-    .integer()
-    .min(1)
-    .max(PAGINATION.MAX_LIMIT)
-    .default(50)
-    .messages({
-      "number.base": "Limit must be a number",
-      "number.integer": "Limit must be an integer",
-      "number.min": "Limit must be at least 1",
-      "number.max": `Limit cannot exceed ${PAGINATION.MAX_LIMIT}`,
-    }),
-  offset: Joi.number().integer().min(0).default(0).messages({
-    "number.base": "Offset must be a number",
-    "number.integer": "Offset must be an integer",
-    "number.min": "Offset must be at least 0",
-  }),
-  startDate: Joi.date().iso().optional().messages({
-    "date.format": "Start date must be in ISO format",
-  }),
-  endDate: Joi.date().iso().optional().messages({
-    "date.format": "End date must be in ISO format",
-  }),
-  type: Joi.string()
-    .valid(...Object.values(MESSAGE_TYPES))
-    .optional()
-    .messages({
-      "any.only": `Message type must be one of: ${Object.values(MESSAGE_TYPES).join(", ")}`,
-    }),
 });
 
 // Message stats query validation schema
@@ -219,6 +266,87 @@ export const sendSeenSchema = Joi.object({
 // Start/Stop typing validation schema
 export const typingSchema = Joi.object({
   to: phoneNumberSchema,
+});
+
+// Message management validation schema
+export const messageManagementSchema = Joi.object({
+  action: Joi.string()
+    .valid("delete", "unsend", "star", "unstar", "edit", "reaction", "read")
+    .required()
+    .messages({
+      "any.only":
+        "Action must be one of: delete, unsend, star, unstar, edit, reaction, read",
+      "any.required": "Action is required",
+    }),
+
+  // Message ID (required for all actions)
+  messageId: Joi.string().required().messages({
+    "any.required": "Message ID is required",
+    "string.base": "Message ID must be a string",
+  }),
+
+  // Recipient phone number (required for all actions except read)
+  phone: Joi.when("action", {
+    is: "read",
+    then: Joi.optional(),
+    otherwise: phoneNumberSchema.messages({
+      "any.required":
+        "Recipient phone number (phone) is required for message management actions",
+    }),
+  }),
+
+  // For delete action
+  forEveryone: Joi.when("action", {
+    is: "delete",
+    then: Joi.boolean().optional().default(false),
+    otherwise: Joi.optional(),
+  }),
+
+  // For edit action
+  newText: Joi.when("action", {
+    is: "edit",
+    then: Joi.string()
+      .max(VALIDATION.MESSAGE.MAX_LENGTH)
+      .required()
+      .messages({
+        "string.max": `New text cannot exceed ${VALIDATION.MESSAGE.MAX_LENGTH} characters`,
+        "any.required": "New text is required for edit action",
+      }),
+    otherwise: Joi.optional(),
+  }),
+
+  // For reaction action
+  emoji: Joi.when("action", {
+    is: "reaction",
+    then: Joi.string().max(10).required().messages({
+      "string.max": "Emoji cannot exceed 10 characters",
+      "any.required": "Emoji is required for reaction action",
+    }),
+    otherwise: Joi.optional(),
+  }),
+
+  // For read action
+  jid: Joi.when("action", {
+    is: "read",
+    then: phoneNumberSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  messageKey: Joi.when("action", {
+    is: "read",
+    then: Joi.object({
+      id: Joi.string().required(),
+      remoteJid: Joi.string().required(),
+      fromMe: Joi.boolean().required(),
+    })
+      .required()
+      .messages({
+        "any.required": "Message key is required for read action",
+      }),
+    otherwise: Joi.optional(),
+  }),
+}).messages({
+  "object.unknown": "Unknown field: {#label}",
 });
 
 // Validation middleware functions
@@ -249,36 +377,6 @@ export const validateSendMessage = (req, res, next) => {
 
   req.params = paramsValidation.value;
   req.body = bodyValidation.value;
-  next();
-};
-
-export const validateMessageHistory = (req, res, next) => {
-  const paramsValidation = sessionIdParamSchema.validate(req.params);
-  if (paramsValidation.error) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation error",
-      details: paramsValidation.error.details.map((detail) => ({
-        field: detail.path.join("."),
-        message: detail.message,
-      })),
-    });
-  }
-
-  const queryValidation = messageHistoryQuerySchema.validate(req.query);
-  if (queryValidation.error) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation error",
-      details: queryValidation.error.details.map((detail) => ({
-        field: detail.path.join("."),
-        message: detail.message,
-      })),
-    });
-  }
-
-  req.params = paramsValidation.value;
-  req.query = queryValidation.value;
   next();
 };
 
@@ -399,5 +497,35 @@ export const validateMessageStats = (req, res, next) => {
 
   req.params = paramsValidation.value;
   req.query = queryValidation.value;
+  next();
+};
+
+export const validateMessageManagement = (req, res, next) => {
+  const paramsValidation = sessionIdParamSchema.validate(req.params);
+  if (paramsValidation.error) {
+    return res.status(400).json({
+      success: false,
+      error: "Validation error",
+      details: paramsValidation.error.details.map((detail) => ({
+        field: detail.path.join("."),
+        message: detail.message,
+      })),
+    });
+  }
+
+  const bodyValidation = messageManagementSchema.validate(req.body);
+  if (bodyValidation.error) {
+    return res.status(400).json({
+      success: false,
+      error: "Validation error",
+      details: bodyValidation.error.details.map((detail) => ({
+        field: detail.path.join("."),
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.params = paramsValidation.value;
+  req.body = bodyValidation.value;
   next();
 };

@@ -128,7 +128,7 @@ const registerWorker = async () => {
   };
 
   logger.debug("Attempting worker registration:", {
-    url: `${serviceConfig.backendUrl}/api/v1/workers/register`,
+    url: `${serviceConfig.backendUrl}/api/workers/register`,
     workerId: serviceConfig.workerId,
     endpoint: serviceConfig.workerEndpoint,
     authToken: serviceConfig.workerAuthToken
@@ -139,7 +139,7 @@ const registerWorker = async () => {
 
   try {
     const response = await axios.post(
-      `${serviceConfig.backendUrl}/api/v1/workers/register`,
+      `${serviceConfig.backendUrl}/api/workers/register`,
       registrationData,
       {
         timeout: 15000,
@@ -182,7 +182,7 @@ const startHeartbeat = () => {
     try {
       const heartbeatPayload = await getEnhancedHeartbeatPayload();
       await axios.put(
-        `${serviceConfig.backendUrl}/api/v1/workers/${serviceConfig.workerId}/heartbeat`,
+        `${serviceConfig.backendUrl}/api/workers/${serviceConfig.workerId}/heartbeat`,
         heartbeatPayload,
         {
           timeout: 5000,
@@ -324,7 +324,7 @@ const notifyBackend = async (event, sessionId, data = {}) => {
 
   try {
     if (event === "message_status") {
-      endpoint = `${serviceConfig.backendUrl}/api/v1/webhooks/message-status`;
+      endpoint = `${serviceConfig.backendUrl}/api/webhooks/message-status`;
       payload = {
         sessionId,
         messageId: data.messageId,
@@ -333,7 +333,7 @@ const notifyBackend = async (event, sessionId, data = {}) => {
         ...data,
       };
     } else {
-      endpoint = `${serviceConfig.backendUrl}/api/v1/webhooks/session-status`;
+      endpoint = `${serviceConfig.backendUrl}/api/webhooks/session-status`;
       let status;
       switch (event) {
         case "session_created":
@@ -367,8 +367,9 @@ const notifyBackend = async (event, sessionId, data = {}) => {
         status,
         timestamp: new Date().toISOString(),
       };
-      if (status === "QR_REQUIRED" && data.qrCode) {
-        payload.qrCode = data.qrCode;
+      if (status === "QR_REQUIRED" && data.qrString) {
+        payload.qrCode = data.qrString; // Send raw QR string instead of Base64 image
+        payload.workerId = serviceConfig.workerId; // Add workerId as required by backend
       } else if (status === "CONNECTED" && data.phoneNumber) {
         const formattedPhoneNumber = formatPhoneNumber(data.phoneNumber);
         if (formattedPhoneNumber) {
@@ -479,7 +480,7 @@ const getAssignedSessions = async () => {
   }
   try {
     const response = await axios.get(
-      `${serviceConfig.backendUrl}/api/v1/workers/${serviceConfig.workerId}/sessions/assigned`,
+      `${serviceConfig.backendUrl}/api/workers/${serviceConfig.workerId}/sessions/assigned`,
       {
         timeout: 10000,
         headers: {
@@ -518,7 +519,7 @@ const reportRecoveryStatus = async (recoveryData) => {
       },
     };
     await axios.post(
-      `${serviceConfig.backendUrl}/api/v1/workers/${serviceConfig.workerId}/sessions/recovery-status`,
+      `${serviceConfig.backendUrl}/api/workers/${serviceConfig.workerId}/sessions/recovery-status`,
       payload,
       {
         timeout: 10000,
@@ -551,7 +552,7 @@ const notifySessionsPreserved = async (preservedSessions) => {
   }
   try {
     await axios.post(
-      `${serviceConfig.backendUrl}/api/v1/workers/${serviceConfig.workerId}/sessions-preserved`,
+      `${serviceConfig.backendUrl}/api/workers/${serviceConfig.workerId}/sessions-preserved`,
       {
         workerId: serviceConfig.workerId,
         preservedSessions,
@@ -589,23 +590,20 @@ const unregisterWorker = async () => {
     logger.info("Attempting to unregister worker from backend:", {
       workerId: serviceConfig.workerId,
       workerEndpoint: serviceConfig.workerEndpoint,
-      backendEndpoint: `${serviceConfig.backendUrl}/api/v1/workers/unregister`,
+      backendEndpoint: `${serviceConfig.backendUrl}/api/workers/unregister`,
       authToken: serviceConfig.workerAuthToken
         ? `${serviceConfig.workerAuthToken.substring(0, 10)}...`
         : "NOT_SET",
       payload: unregisterPayload,
     });
-    await axios.delete(
-      `${serviceConfig.backendUrl}/api/v1/workers/unregister`,
-      {
-        timeout: 5000,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceConfig.workerAuthToken}`,
-        },
-        data: unregisterPayload,
-      }
-    );
+    await axios.delete(`${serviceConfig.backendUrl}/api/workers/unregister`, {
+      timeout: 5000,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceConfig.workerAuthToken}`,
+      },
+      data: unregisterPayload,
+    });
     logger.info("Worker unregistered successfully", {
       workerId: serviceConfig.workerId,
       endpoint: serviceConfig.workerEndpoint,
@@ -617,7 +615,7 @@ const unregisterWorker = async () => {
       workerEndpoint: serviceConfig.workerEndpoint,
       status: error.response?.status,
       responseData: error.response?.data,
-      backendEndpoint: `${serviceConfig.backendUrl}/api/v1/workers/unregister`,
+      backendEndpoint: `${serviceConfig.backendUrl}/api/workers/unregister`,
     });
   }
 };
