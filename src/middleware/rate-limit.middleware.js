@@ -85,23 +85,6 @@ export const messageRateLimit = rateLimit({
 });
 
 /**
- * Bulk Message Rate Limiting
- * More restrictive for bulk operations
- */
-export const bulkMessageRateLimit = rateLimit({
-  windowMs: RATE_LIMITS.FREE_TIER.BULK.windowMs,
-  max: RATE_LIMITS.FREE_TIER.BULK.max,
-  message: "Bulk message rate limit exceeded, please try again later",
-  handler: createRateLimitHandler(
-    "Bulk message rate limit exceeded, please try again later"
-  ),
-  keyGenerator: (req) => {
-    const sessionId = req.params.sessionId || req.body.sessionId;
-    return sessionId ? `bulk-${sessionId}` : req.ip;
-  },
-});
-
-/**
  * QR Code Generation Rate Limiting
  * Prevents excessive QR code requests
  */
@@ -235,13 +218,11 @@ export const rateLimitConfig = {
     general: { windowMs: 15 * 60 * 1000, max: 1000 },
     session: { windowMs: 5 * 60 * 1000, max: 50 },
     message: { windowMs: 60 * 1000, max: 100 },
-    bulk: { windowMs: 10 * 60 * 1000, max: 20 },
   },
   production: {
     general: { windowMs: 15 * 60 * 1000, max: 100 },
     session: { windowMs: 5 * 60 * 1000, max: 10 },
     message: { windowMs: 60 * 1000, max: 30 },
-    bulk: { windowMs: 10 * 60 * 1000, max: 5 },
   },
 };
 

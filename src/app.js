@@ -5,181 +5,56 @@ import multer from "multer";
 
 import config from "./config/environment.js";
 import logger from "./utils/logger.js";
-import { ApiResponse } from "./utils/helpers.js";
+import { SERVICE_ORDER } from "./utils/constants.js";
+import {
+  createHelmetConfig,
+  createCorsConfig,
+  createMulterConfig,
+  createRootRouteHandler,
+  create404Handler,
+  createRequestLogger,
+  createServiceInjector,
+} from "./utils/app-config.js";
 import errorHandler from "./middleware/error-handler.middleware.js";
 import { generalRateLimit } from "./middleware/rate-limit.middleware.js";
 
-// Import services
-import BaileysService from "./services/baileys.service.js";
-import StorageService from "./services/storage.service.js";
-import DatabaseService from "./services/database.service.js";
-import RedisService from "./services/redis.service.js";
-import WorkerRegistryService from "./services/worker-registry.service.js";
+// Import services as modules
+import baileysService from "./services/baileys.service.js";
+import storageService from "./services/storage.service.js";
+import databaseService from "./services/database.service.js";
+import redisService from "./services/redis.service.js";
+import workerRegistryService from "./services/worker-registry.service.js";
 
-// Import controllers
-import SessionController from "./controllers/session.controller.js";
-import MessageController from "./controllers/message.controller.js";
-import HealthController from "./controllers/health.controller.js";
+// Import routes
+import apiRoutes from "./routes/index.js";
+import healthRoutes from "./routes/health.routes.js";
 
-// Application state
 const appState = {
   app: null,
   server: null,
-  services: {},
-  controllers: {},
+  services: {
+    baileys: baileysService,
+    storage: storageService,
+    database: databaseService,
+    redis: redisService,
+    workerRegistry: workerRegistryService,
+  },
   isShuttingDown: false,
 };
 
-// Constants
 const PORT = config.server.port;
-const SERVICE_INIT_ORDER = [
-  "storage",
-  "database",
-  "redis",
-  "baileys",
-  "workerRegistry",
-];
-const SHUTDOWN_ORDER = [
-  "workerRegistry",
-  "baileys",
-  "redis",
-  "storage",
-  "database",
-];
 
-// ===== UTILITY FUNCTIONS =====
-
-const createServiceInstances = () => ({
-  baileys: new BaileysService(),
-  storage: new StorageService(),
-  database: new DatabaseService(),
-  redis: new RedisService(),
-  workerRegistry: new WorkerRegistryService(),
-});
-
-const createControllerInstances = (services) => ({
-  session: new SessionController(
-    services.baileys,
-    services.storage,
-    services.database,
-    services.redis,
-    services.workerRegistry
-  ),
-  message: new MessageController(
-    services.baileys,
-    services.storage,
-    services.database,
-    services.redis,
-    services.workerRegistry
-  ),
-  health: new HealthController(
-    services.baileys,
-    services.storage,
-    services.database,
-    services.redis,
-    services.workerRegistry
-  ),
-});
-
-const createHelmetConfig = () => ({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
-});
-
-const createCorsConfig = () => ({
-  origin: config.security.corsOrigin,
-  credentials: true,
-});
-
-const createMulterConfig = () => ({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: config.fileUpload.maxFileSize },
-  fileFilter: (req, file, cb) => {
-    if (config.fileUpload.allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      const error = new Error(`File type ${file.mimetype} not allowed`);
-      error.code = "INVALID_FILE_TYPE";
-      cb(error, false);
-    }
-  },
-});
-
-const createRootRouteHandler = () => (req, res) => {
-  const response = ApiResponse.createSuccessResponse(
-    {
-      name: "WhatsApp Gateway Worker",
-      version: process.env.npm_package_version || "1.0.0",
-      workerId: config.server.workerId,
-      status: "running",
-      uptime: process.uptime(),
-      environment: config.server.nodeEnv,
-      maxSessions: config.server.maxSessions,
-      endpoint: config.server.workerEndpoint,
-    },
-    "WhatsApp Gateway Worker is running"
-  );
-  res.json(response);
-};
-
-const create404Handler = () => (req, res) => {
-  logger.warn("404 - Endpoint not found", {
-    path: req.originalUrl,
-    method: req.method,
-    ip: req.ip,
-    userAgent: req.get("User-Agent"),
-  });
-
-  const response = ApiResponse.createNotFoundResponse(
-    `Endpoint not found: ${req.method} ${req.originalUrl}`
-  );
-  res.status(404).json(response);
-};
-
-const createRequestLogger = () => (req, res, next) => {
-  logger.info(`${req.method} ${req.path}`, {
-    ip: req.ip,
-    userAgent: req.get("User-Agent"),
-    timestamp: new Date().toISOString(),
-  });
-  next();
-};
-
-// ===== INITIALIZATION FUNCTIONS =====
-
-const initializeServices = () => {
-  logger.info("Initializing services...");
-  appState.services = createServiceInstances();
-  global.services = appState.services;
-};
-
-const initializeControllers = () => {
-  logger.info("Initializing controllers...");
-  appState.controllers = createControllerInstances(appState.services);
-  global.controllers = appState.controllers;
-};
-
-const setupSecurityMiddleware = () => {
+const setupMiddleware = () => {
   if (config.production.enableHelmet) {
     appState.app.use(helmet(createHelmetConfig()));
   }
-
   if (config.development.enableCors) {
     appState.app.use(cors(createCorsConfig()));
   }
-
   if (config.security.trustProxy) {
     appState.app.set("trust proxy", true);
   }
-};
 
-const setupRateLimiting = () => {
   const rateLimitingEnabled =
     config.server.nodeEnv === "production" &&
     process.env.RATE_LIMITING_ENABLED !== "false";
@@ -189,49 +64,46 @@ const setupRateLimiting = () => {
     logger.info("Rate limiting enabled");
   } else {
     logger.info(
-      `Rate limiting disabled (NODE_ENV: ${config.server.nodeEnv}, RATE_LIMITING_ENABLED: ${process.env.RATE_LIMITING_ENABLED || "not set"})`
+      `Rate limiting disabled (NODE_ENV: ${config.server.nodeEnv}, RATE_LIMITING_ENABLED: ${
+        process.env.RATE_LIMITING_ENABLED || "not set"
+      })`
     );
   }
-};
 
-const setupBodyParsing = () => {
-  const jsonConfig = { limit: config.fileUpload.maxRequestSize };
-  const urlencodedConfig = {
-    extended: true,
-    limit: config.fileUpload.maxRequestSize,
-  };
+  appState.app.use(express.json({ limit: config.fileUpload.maxRequestSize }));
+  appState.app.use(
+    express.urlencoded({
+      extended: true,
+      limit: config.fileUpload.maxRequestSize,
+    })
+  );
 
-  appState.app.use(express.json(jsonConfig));
-  appState.app.use(express.urlencoded(urlencodedConfig));
-};
-
-const setupFileUpload = () => {
   const upload = multer(createMulterConfig());
-  global.upload = upload;
-};
+  appState.app.use((req, res, next) => {
+    req.upload = upload;
+    next();
+  });
 
-const setupMiddleware = () => {
-  setupSecurityMiddleware();
-  setupRateLimiting();
-  setupBodyParsing();
-  setupFileUpload();
   appState.app.use(createRequestLogger());
-};
 
-const setupHealthEndpoints = () => {
-  const { health } = appState.controllers;
-  appState.app.get("/health", health.getHealth.bind(health));
-  appState.app.get("/metrics", health.getMetrics.bind(health));
-  appState.app.get("/ready", health.getReadiness.bind(health));
-  appState.app.get("/live", health.getLiveness.bind(health));
+  // Inject services into all requests
+  appState.app.use(createServiceInjector(appState.services));
 };
 
 const setupRoutes = async () => {
-  const { default: routes } = await import("./routes/index.js");
-
+  // Root route
   appState.app.get("/", createRootRouteHandler());
-  appState.app.use("/api", routes);
-  setupHealthEndpoints();
+
+  // API routes with services injected via middleware
+  appState.app.use("/api", apiRoutes);
+
+  // Direct health endpoints for backend compatibility (backend expects these at root level)
+  appState.app.use("/health", healthRoutes);
+  appState.app.use("/metrics", healthRoutes);
+  appState.app.use("/ready", healthRoutes);
+  appState.app.use("/live", healthRoutes);
+
+  // 404 handler
   appState.app.use("*", create404Handler());
 };
 
@@ -239,20 +111,19 @@ const setupErrorHandling = () => {
   appState.app.use(errorHandler);
 };
 
-// ===== SERVICE MANAGEMENT =====
-
 const initializeAllServices = async () => {
   logger.info("Initializing all services...");
 
   try {
-    for (const serviceName of SERVICE_INIT_ORDER) {
+    for (const serviceName of SERVICE_ORDER.INIT) {
       await appState.services[serviceName].initialize();
       logger.info(`${serviceName} service initialized`);
     }
 
     // Set service dependencies
-    appState.services.workerRegistry.setServices(appState.services.baileys);
-    logger.info("Worker Registry service dependencies set");
+    appState.services.workerRegistry.setServices(appState.services);
+    appState.services.baileys.setServices(appState.services);
+
     logger.info("All services initialized successfully");
   } catch (error) {
     logger.error("Service initialization failed:", error);
@@ -263,15 +134,18 @@ const initializeAllServices = async () => {
 const shutdownAllServices = async () => {
   logger.info("Shutting down services...");
 
-  for (const serviceName of SHUTDOWN_ORDER) {
+  for (const serviceName of SERVICE_ORDER.SHUTDOWN) {
     const service = appState.services[serviceName];
-    if (service) {
+    if (service && service.shutdown) {
       try {
-        if (service.shutdown) {
-          await service.shutdown();
-        } else if (service.close) {
-          await service.close();
-        }
+        await service.shutdown();
+        logger.info(`${serviceName} service shut down`);
+      } catch (error) {
+        logger.error(`Error shutting down ${serviceName} service:`, error);
+      }
+    } else if (service && service.close) {
+      try {
+        await service.close();
         logger.info(`${serviceName} service shut down`);
       } catch (error) {
         logger.error(`Error shutting down ${serviceName} service:`, error);
@@ -279,8 +153,6 @@ const shutdownAllServices = async () => {
     }
   }
 };
-
-// ===== BACKEND INTEGRATION =====
 
 const registerWithBackend = async () => {
   if (!config.backend.url) {
@@ -350,8 +222,6 @@ const startSessionRecovery = async () => {
   }
 };
 
-// ===== SHUTDOWN MANAGEMENT =====
-
 const gracefulShutdown = async (signal) => {
   if (appState.isShuttingDown) {
     logger.warn("Shutdown already in progress, ignoring signal:", signal);
@@ -362,13 +232,11 @@ const gracefulShutdown = async (signal) => {
   logger.info(`Received ${signal}, starting graceful shutdown...`);
 
   try {
-    // Stop accepting new connections
     if (appState.server) {
       appState.server.close(() => {
         logger.info("HTTP server closed");
       });
     }
-
     await shutdownAllServices();
     logger.info("Graceful shutdown completed");
     process.exit(0);
@@ -413,27 +281,14 @@ const startServer = () => {
   });
 };
 
-// ===== MAIN APPLICATION FLOW =====
-
 const start = async () => {
   try {
-    // Initialize Express app
     appState.app = express();
-
-    // Initialize services and controllers
-    initializeServices();
     setupMiddleware();
     setupErrorHandling();
-
-    // Initialize all services
     await initializeAllServices();
-    initializeControllers();
-
-    // Setup routes and start server
     await setupRoutes();
     await startServer();
-
-    // Post-startup tasks
     await registerWithBackend();
     await startSessionRecovery();
     setupGracefulShutdown();
@@ -443,25 +298,9 @@ const start = async () => {
   }
 };
 
-// ===== APPLICATION ENTRY POINT =====
-
 start().catch((error) => {
   logger.error("Failed to start worker:", error);
   process.exit(1);
 });
 
-// ===== EXPORTS =====
-
-export {
-  start,
-  setupMiddleware,
-  setupRoutes,
-  initializeServices,
-  initializeControllers,
-  initializeAllServices,
-  registerWithBackend,
-  startSessionRecovery,
-  setupGracefulShutdown,
-};
-
-export const { app, services, controllers } = appState;
+export { start, appState as appDetails };

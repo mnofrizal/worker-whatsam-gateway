@@ -191,19 +191,16 @@ export const RATE_LIMITS = {
     GENERAL: { windowMs: 15 * 60 * 1000, max: 50 },
     SESSION: { windowMs: 5 * 60 * 1000, max: 5 },
     MESSAGE: { windowMs: 60 * 1000, max: 10 },
-    BULK: { windowMs: 10 * 60 * 1000, max: 1 },
   },
   PRO_TIER: {
     GENERAL: { windowMs: 15 * 60 * 1000, max: 200 },
     SESSION: { windowMs: 5 * 60 * 1000, max: 20 },
     MESSAGE: { windowMs: 60 * 1000, max: 60 },
-    BULK: { windowMs: 10 * 60 * 1000, max: 10 },
   },
   PREMIUM_TIER: {
     GENERAL: { windowMs: 15 * 60 * 1000, max: 1000 },
     SESSION: { windowMs: 5 * 60 * 1000, max: 100 },
     MESSAGE: { windowMs: 60 * 1000, max: 300 },
-    BULK: { windowMs: 10 * 60 * 1000, max: 50 },
   },
 };
 
@@ -275,10 +272,6 @@ export const VALIDATION = {
   MESSAGE: {
     MAX_LENGTH: 4096,
     MIN_LENGTH: 1,
-  },
-  BULK_MESSAGE: {
-    MAX_RECIPIENTS: 100,
-    MIN_RECIPIENTS: 1,
   },
   API_KEY: {
     MIN_LENGTH: 32,
@@ -373,6 +366,15 @@ export const TIME = {
 };
 
 /**
+ * Service Initialization Order
+ * Order in which services should be initialized and shut down
+ */
+export const SERVICE_ORDER = {
+  INIT: ["storage", "database", "redis", "baileys", "workerRegistry"],
+  SHUTDOWN: ["workerRegistry", "baileys", "redis", "storage", "database"],
+};
+
+/**
  * Export all constants as a single object for convenience
  */
 export default {
@@ -394,4 +396,5 @@ export default {
   DEFAULTS,
   REGEX,
   TIME,
+  SERVICE_ORDER,
 };

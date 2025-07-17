@@ -8,248 +8,230 @@ import logger from "../utils/logger.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-class StorageService {
-  constructor() {
-    this.client = null;
-    this.config = config.minio;
-    this.bucketName = this.config.buckets.sessions;
-    this.mediaBucket = this.config.buckets.media;
-    this.backupsBucket = this.config.buckets.backups;
-    this.initialized = false;
-  }
+let client = null;
+const minioConfig = config.minio;
+const bucketName = minioConfig.buckets.sessions;
+const mediaBucket = minioConfig.buckets.media;
+const backupsBucket = minioConfig.buckets.backups;
+let initialized = false;
 
-  async initialize() {
+const initialize = async () => {
+  try {
+    logger.info("Initializing MinIO storage service...");
+
+    if (!minioConfig.endpoint) {
+      logger.warn("MinIO not configured, storage service will be disabled");
+      return;
+    }
+
+    client = new Client({
+      endPoint: minioConfig.endpoint,
+      port: minioConfig.port,
+      useSSL: minioConfig.useSSL,
+      accessKey: minioConfig.accessKey,
+      secretKey: minioConfig.secretKey,
+      region: minioConfig.region,
+    });
+
+    await ensureBucketsExist();
+
+    initialized = true;
+    logger.info("MinIO storage service initialized successfully", {
+      endpoint: minioConfig.endpoint,
+      port: minioConfig.port,
+      useSSL: minioConfig.useSSL,
+      buckets: Object.values(minioConfig.buckets),
+    });
+  } catch (error) {
+    logger.error("Failed to initialize MinIO storage service:", error);
+    logger.warn("Storage service will be disabled");
+  }
+};
+
+const ensureBucketsExist = async () => {
+  const buckets = [bucketName, mediaBucket, backupsBucket];
+
+  for (const bucket of buckets) {
     try {
-      logger.info("Initializing MinIO storage service...");
-
-      // Check if MinIO configuration is available
-      if (!this.config.endpoint) {
-        logger.warn("MinIO not configured, storage service will be disabled");
-        return;
+      const exists = await client.bucketExists(bucket);
+      if (!exists) {
+        await client.makeBucket(bucket, minioConfig.region);
+        logger.info(`Created MinIO bucket: ${bucket}`);
       }
-
-      this.client = new Client({
-        endPoint: this.config.endpoint,
-        port: this.config.port,
-        useSSL: this.config.useSSL,
-        accessKey: this.config.accessKey,
-        secretKey: this.config.secretKey,
-        region: this.config.region,
-      });
-
-      // Test connection and create buckets
-      await this.ensureBucketsExist();
-
-      this.initialized = true;
-      logger.info("MinIO storage service initialized successfully", {
-        endpoint: this.config.endpoint,
-        port: this.config.port,
-        useSSL: this.config.useSSL,
-        buckets: Object.values(this.config.buckets),
-      });
     } catch (error) {
-      logger.error("Failed to initialize MinIO storage service:", error);
-      // Don't throw error to allow worker to start without MinIO
-      logger.warn("Storage service will be disabled");
+      logger.error(`Failed to create/check bucket ${bucket}:`, error);
+      throw error;
     }
   }
+};
 
-  async ensureBucketsExist() {
-    const buckets = [this.bucketName, this.mediaBucket, this.backupsBucket];
-
-    for (const bucket of buckets) {
-      try {
-        const exists = await this.client.bucketExists(bucket);
-        if (!exists) {
-          await this.client.makeBucket(bucket, this.config.region);
-          logger.info(`Created MinIO bucket: ${bucket}`);
-        }
-      } catch (error) {
-        logger.error(`Failed to create/check bucket ${bucket}:`, error);
-        throw error;
-      }
-    }
+const uploadSessionFiles = async (sessionId) => {
+  if (!initialized) {
+    logger.warn(
+      "Storage service not initialized, skipping session file upload"
+    );
+    return { success: false, reason: "Storage not available" };
   }
 
-  async uploadSessionFiles(sessionId) {
-    if (!this.initialized) {
-      logger.warn(
-        "Storage service not initialized, skipping session file upload"
-      );
-      return { success: false, reason: "Storage not available" };
-    }
-
-    try {
-      const localPath = join(
-        __dirname,
-        "../../",
-        config.whatsapp.sessionPath,
-        sessionId
-      );
-      const remotePath = `sessions/${sessionId}`;
-
-      // Check if local session directory exists
-      try {
-        await fs.access(localPath);
-      } catch (error) {
-        logger.warn(`Session directory not found: ${localPath}`);
-        return { success: false, reason: "Session directory not found" };
-      }
-
-      const files = await fs.readdir(localPath);
-
-      if (files.length === 0) {
-        logger.warn(`No session files found in: ${localPath}`);
-        return { success: false, reason: "No session files found" };
-      }
-
-      for (const file of files) {
-        const filePath = join(localPath, file);
-        const objectName = `${remotePath}/${file}`;
-
-        await this.client.fPutObject(this.bucketName, objectName, filePath);
-        logger.debug(`Uploaded session file: ${objectName}`);
-      }
-
-      logger.info(`Session files uploaded successfully for ${sessionId}`);
-      return { success: true, filesUploaded: files.length };
-    } catch (error) {
-      logger.error(`Failed to upload session files for ${sessionId}:`, error);
-      throw new Error(`Failed to upload session files: ${error.message}`);
-    }
-  }
-
-  async downloadSessionFiles(sessionId) {
-    if (!this.initialized) {
-      logger.warn(
-        "Storage service not initialized, skipping session file download"
-      );
-      return { success: false, reason: "Storage not available" };
-    }
+  try {
+    const localPath = join(
+      __dirname,
+      "../../",
+      config.whatsapp.sessionPath,
+      sessionId
+    );
+    const remotePath = `sessions/${sessionId}`;
 
     try {
-      const localPath = join(
-        __dirname,
-        "../../",
-        config.whatsapp.sessionPath,
-        sessionId
-      );
-      const remotePath = `sessions/${sessionId}`;
-
-      // Ensure local directory exists
-      await fs.mkdir(localPath, { recursive: true });
-
-      // List objects in the session path
-      const objectsStream = this.client.listObjects(
-        this.bucketName,
-        remotePath,
-        true
-      );
-      const objects = [];
-
-      for await (const obj of objectsStream) {
-        objects.push(obj.name);
-      }
-
-      if (objects.length === 0) {
-        logger.warn(`No session files found in storage for ${sessionId}`);
-        return { success: false, reason: "No session files found in storage" };
-      }
-
-      // Download each file
-      for (const objectName of objects) {
-        const fileName = objectName.split("/").pop();
-        const localFile = join(localPath, fileName);
-
-        await this.client.fGetObject(this.bucketName, objectName, localFile);
-        logger.debug(`Downloaded session file: ${objectName}`);
-      }
-
-      logger.info(`Session files downloaded successfully for ${sessionId}`);
-      return { success: true, filesDownloaded: objects.length };
+      await fs.access(localPath);
     } catch (error) {
-      logger.error(`Failed to download session files for ${sessionId}:`, error);
-      throw new Error(`Failed to download session files: ${error.message}`);
+      logger.warn(`Session directory not found: ${localPath}`);
+      return { success: false, reason: "Session directory not found" };
     }
+
+    const files = await fs.readdir(localPath);
+
+    if (files.length === 0) {
+      logger.warn(`No session files found in: ${localPath}`);
+      return { success: false, reason: "No session files found" };
+    }
+
+    for (const file of files) {
+      const filePath = join(localPath, file);
+      const objectName = `${remotePath}/${file}`;
+
+      await client.fPutObject(bucketName, objectName, filePath);
+      logger.debug(`Uploaded session file: ${objectName}`);
+    }
+
+    logger.info(`Session files uploaded successfully for ${sessionId}`);
+    return { success: true, filesUploaded: files.length };
+  } catch (error) {
+    logger.error(`Failed to upload session files for ${sessionId}:`, error);
+    throw new Error(`Failed to upload session files: ${error.message}`);
+  }
+};
+
+const downloadSessionFiles = async (sessionId) => {
+  if (!initialized) {
+    logger.warn(
+      "Storage service not initialized, skipping session file download"
+    );
+    return { success: false, reason: "Storage not available" };
   }
 
-  async deleteSessionFiles(sessionId) {
-    if (!this.initialized) {
-      logger.warn(
-        "Storage service not initialized, skipping session file deletion"
+  try {
+    const localPath = join(
+      __dirname,
+      "../../",
+      config.whatsapp.sessionPath,
+      sessionId
+    );
+    const remotePath = `sessions/${sessionId}`;
+
+    await fs.mkdir(localPath, { recursive: true });
+
+    const objectsStream = client.listObjects(bucketName, remotePath, true);
+    const objects = [];
+
+    for await (const obj of objectsStream) {
+      objects.push(obj.name);
+    }
+
+    if (objects.length === 0) {
+      logger.warn(`No session files found in storage for ${sessionId}`);
+      return { success: false, reason: "No session files found in storage" };
+    }
+
+    for (const objectName of objects) {
+      const fileName = objectName.split("/").pop();
+      const localFile = join(localPath, fileName);
+
+      await client.fGetObject(bucketName, objectName, localFile);
+      logger.debug(`Downloaded session file: ${objectName}`);
+    }
+
+    logger.info(`Session files downloaded successfully for ${sessionId}`);
+    return { success: true, filesDownloaded: objects.length };
+  } catch (error) {
+    logger.error(`Failed to download session files for ${sessionId}:`, error);
+    throw new Error(`Failed to download session files: ${error.message}`);
+  }
+};
+
+const deleteSessionFiles = async (sessionId) => {
+  if (!initialized) {
+    logger.warn(
+      "Storage service not initialized, skipping session file deletion"
+    );
+    return { success: false, reason: "Storage not available" };
+  }
+
+  try {
+    const remotePath = `sessions/${sessionId}`;
+
+    const objectsStream = client.listObjects(bucketName, remotePath, true);
+    const objectsList = [];
+
+    for await (const obj of objectsStream) {
+      objectsList.push(obj.name);
+    }
+
+    if (objectsList.length > 0) {
+      await client.removeObjects(bucketName, objectsList);
+      logger.info(
+        `Deleted ${objectsList.length} session files for ${sessionId}`
       );
-      return { success: false, reason: "Storage not available" };
     }
 
-    try {
-      const remotePath = `sessions/${sessionId}`;
+    return { success: true, filesDeleted: objectsList.length };
+  } catch (error) {
+    logger.error(`Failed to delete session files for ${sessionId}:`, error);
+    throw new Error(`Failed to delete session files: ${error.message}`);
+  }
+};
 
-      // List objects to delete
-      const objectsStream = this.client.listObjects(
-        this.bucketName,
-        remotePath,
-        true
-      );
-      const objectsList = [];
-
-      for await (const obj of objectsStream) {
-        objectsList.push(obj.name);
-      }
-
-      if (objectsList.length > 0) {
-        await this.client.removeObjects(this.bucketName, objectsList);
-        logger.info(
-          `Deleted ${objectsList.length} session files for ${sessionId}`
-        );
-      }
-
-      return { success: true, filesDeleted: objectsList.length };
-    } catch (error) {
-      logger.error(`Failed to delete session files for ${sessionId}:`, error);
-      throw new Error(`Failed to delete session files: ${error.message}`);
-    }
+const uploadMedia = async (sessionId, mediaBuffer, fileName, mimeType) => {
+  if (!initialized) {
+    throw new Error("Storage service not initialized");
   }
 
-  async uploadMedia(sessionId, mediaBuffer, fileName, mimeType) {
-    if (!this.initialized) {
-      throw new Error("Storage service not initialized");
-    }
+  try {
+    const objectName = `media/${sessionId}/${Date.now()}-${fileName}`;
 
-    try {
-      const objectName = `media/${sessionId}/${Date.now()}-${fileName}`;
+    await client.putObject(mediaBucket, objectName, mediaBuffer, {
+      "Content-Type": mimeType,
+    });
 
-      await this.client.putObject(this.mediaBucket, objectName, mediaBuffer, {
-        "Content-Type": mimeType,
-      });
+    const url = await client.presignedGetObject(mediaBucket, objectName, 3600);
 
-      // Generate presigned URL for access
-      const url = await this.client.presignedGetObject(
-        this.mediaBucket,
-        objectName,
-        3600
-      );
-
-      logger.info(`Media uploaded successfully: ${objectName}`);
-      return { url, objectName };
-    } catch (error) {
-      logger.error(`Failed to upload media for ${sessionId}:`, error);
-      throw new Error(`Failed to upload media: ${error.message}`);
-    }
+    logger.info(`Media uploaded successfully: ${objectName}`);
+    return { url, objectName };
+  } catch (error) {
+    logger.error(`Failed to upload media for ${sessionId}:`, error);
+    throw new Error(`Failed to upload media: ${error.message}`);
   }
+};
 
-  isInitialized() {
-    return this.initialized;
+const isInitialized = () => {
+  return initialized;
+};
+
+const close = async () => {
+  if (initialized && client) {
+    logger.info("Closing MinIO storage service...");
+    initialized = false;
+    client = null;
+    logger.info("MinIO storage service closed");
   }
+};
 
-  async close() {
-    if (this.initialized && this.client) {
-      logger.info("Closing MinIO storage service...");
-      // MinIO client doesn't have a close method, just mark as not initialized
-      this.initialized = false;
-      this.client = null;
-      logger.info("MinIO storage service closed");
-    }
-  }
-}
-
-export default StorageService;
+export default {
+  initialize,
+  uploadSessionFiles,
+  downloadSessionFiles,
+  deleteSessionFiles,
+  uploadMedia,
+  isInitialized,
+  close,
+};

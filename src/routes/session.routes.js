@@ -1,7 +1,9 @@
 import express from "express";
+import sessionController from "../controllers/session.controller.js";
+import messageController from "../controllers/message.controller.js";
 import {
   sessionRateLimit,
-  qrCodeRateLimit,
+  messageRateLimit,
 } from "../middleware/rate-limit.middleware.js";
 import {
   validateSessionId,
@@ -10,115 +12,56 @@ import {
 
 const router = express.Router();
 
-// Start WhatsApp session (create if new, connect if existing)
 router.post(
   "/start",
   sessionRateLimit,
   validateSessionCreation,
-  async (req, res, next) => {
-    try {
-      await global.controllers.session.startSession(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  sessionController.startSession
 );
 
-// Get QR code for session authentication
 router.get(
-  "/:sessionId/qr",
-  qrCodeRateLimit,
+  "/:sessionId/status",
   validateSessionId,
-  async (req, res, next) => {
-    try {
-      await global.controllers.session.getQRCode(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  sessionController.getSessionStatus
 );
 
-// Get session status
-router.get("/:sessionId/status", validateSessionId, async (req, res, next) => {
-  try {
-    await global.controllers.session.getSessionStatus(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Delete session
 router.delete(
   "/:sessionId",
   sessionRateLimit,
   validateSessionId,
-  async (req, res, next) => {
-    try {
-      await global.controllers.session.deleteSession(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  sessionController.deleteSession
 );
 
-// Send message through session
-router.post("/:sessionId/send", async (req, res, next) => {
-  try {
-    await global.controllers.session.sendMessage(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Restart session (stop and start again, keep auth data)
 router.post(
   "/:sessionId/restart",
   sessionRateLimit,
   validateSessionId,
-  async (req, res, next) => {
-    try {
-      await global.controllers.session.restartSession(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  sessionController.restartSession
 );
 
-// Disconnect session (stop session, keep auth data for instant reconnect)
 router.post(
   "/:sessionId/disconnect",
   sessionRateLimit,
   validateSessionId,
-  async (req, res, next) => {
-    try {
-      await global.controllers.session.disconnectSession(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  sessionController.disconnectSession
 );
 
-// Logout session (stop session and delete auth data, requires QR scan)
 router.post(
   "/:sessionId/logout",
   sessionRateLimit,
   validateSessionId,
-  async (req, res, next) => {
-    try {
-      await global.controllers.session.logoutSession(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  sessionController.logoutSession
 );
 
-// List all sessions
-router.get("/", async (req, res, next) => {
-  try {
-    await global.controllers.session.listSessions(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
+router.get("/", sessionController.listSessions);
+
+// Unified send endpoint that handles all message types based on 'type' field
+// This handles POST /api/sessions/{sessionId}/send for all message types
+router.post(
+  "/:sessionId/send",
+  messageRateLimit,
+  validateSessionId,
+  messageController.sendMessage
+);
 
 export default router;

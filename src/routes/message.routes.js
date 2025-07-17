@@ -1,89 +1,59 @@
 import express from "express";
+import messageController from "../controllers/message.controller.js";
+import { messageRateLimit } from "../middleware/rate-limit.middleware.js";
 import {
-  messageRateLimit,
-  bulkMessageRateLimit,
-  fileUploadRateLimit,
-} from "../middleware/rate-limit.middleware.js";
-import {
-  validateSessionId,
-  validatePhoneNumber,
-  validateMessageContent,
-  validateBulkMessage,
-  validateFileUpload,
-  validatePagination,
-} from "../middleware/validation.middleware.js";
+  validateSendMessage,
+  validateSendSeen,
+  validateStartTyping,
+  validateStopTyping,
+  validateMessageHistory,
+  validateMessageStats,
+} from "../validations/message.validation.js";
 
 const router = express.Router();
 
-// Send text message
+// Unified send endpoint for all message types
 router.post(
-  "/:sessionId/send/text",
+  "/:sessionId/send",
   messageRateLimit,
-  validateSessionId,
-  validatePhoneNumber,
-  validateMessageContent,
-  async (req, res, next) => {
-    try {
-      await global.controllers.message.sendTextMessage(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  validateSendMessage,
+  messageController.sendMessage
 );
 
-// Send media message
+// Send read receipt (mark message as seen)
 router.post(
-  "/:sessionId/send/media",
-  fileUploadRateLimit,
-  validateSessionId,
-  validatePhoneNumber,
-  global.upload.single("media"),
-  validateFileUpload,
-  async (req, res, next) => {
-    try {
-      await global.controllers.message.sendMediaMessage(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  "/:sessionId/sendSeen",
+  messageRateLimit,
+  validateSendSeen,
+  messageController.sendSeen
 );
 
-// Get message history
+// Start typing indicator
+router.post(
+  "/:sessionId/startTyping",
+  messageRateLimit,
+  validateStartTyping,
+  messageController.startTyping
+);
+
+// Stop typing indicator
+router.post(
+  "/:sessionId/stopTyping",
+  messageRateLimit,
+  validateStopTyping,
+  messageController.stopTyping
+);
+
 router.get(
   "/:sessionId/history",
-  validateSessionId,
-  validatePagination,
-  async (req, res, next) => {
-    try {
-      await global.controllers.message.getMessageHistory(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+  validateMessageHistory,
+  messageController.getMessageHistory
 );
 
-// Get message statistics
-router.get("/:sessionId/stats", validateSessionId, async (req, res, next) => {
-  try {
-    await global.controllers.message.getMessageStats(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Bulk send messages
-router.post(
-  "/:sessionId/send/bulk",
-  bulkMessageRateLimit,
-  validateSessionId,
-  validateBulkMessage,
-  async (req, res, next) => {
-    try {
-      await global.controllers.message.bulkSendMessages(req, res);
-    } catch (error) {
-      next(error);
-    }
-  }
+router.get(
+  "/:sessionId/stats",
+  validateMessageStats,
+  messageController.getMessageStats
 );
 
 export default router;
