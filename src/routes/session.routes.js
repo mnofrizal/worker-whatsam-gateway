@@ -1,6 +1,5 @@
 import express from "express";
 import sessionController from "../controllers/session.controller.js";
-import messageController from "../controllers/message.controller.js";
 import {
   sessionRateLimit,
   messageRateLimit,
@@ -54,14 +53,5 @@ router.post(
 );
 
 router.get("/", sessionController.listSessions);
-
-// Unified send endpoint that handles all message types based on 'type' field
-// This handles POST /api/sessions/{sessionId}/send for all message types
-router.post(
-  "/:sessionId/send",
-  messageRateLimit,
-  validateSessionId,
-  messageController.sendMessage
-);
 
 export default router;

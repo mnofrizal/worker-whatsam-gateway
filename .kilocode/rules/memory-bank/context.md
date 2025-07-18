@@ -33,6 +33,7 @@
 - ✅ **Session Creation & Management** - Full CRUD operations implemented
 - ✅ **QR Code Generation & Display** - Async webhook-based flow working
 - ✅ **Message Operations** - Send/receive messages via Baileys
+- ✅ **Message Management** - Delete, unsend, star, edit, reaction, read operations (unsend bug fixed)
 - ✅ **Session Recovery** - Automatic session restoration after worker restart
 - ✅ **Storage Integration** - MinIO, PostgreSQL, Redis all connected
 - ✅ **Health Monitoring** - Comprehensive health checks and metrics (routing fixed)
@@ -171,10 +172,48 @@
 
 ## 🔄 Recent Changes
 
-**Last Updated:** 2025-01-17 09:05 WIB
+**Last Updated:** 2025-07-18 19:50 WIB
 **Changes Made:**
 
-### Latest Updates (2025-01-17) - MAJOR REFACTORING
+### Latest Updates (2025-07-18) - MESSAGE UNSEND FUNCTIONALITY FIX
+
+- **Unsend Message Bug Fix:**
+  - ✅ Fixed critical bug in `unsendMessage` function in [`src/services/baileys.service.js`](src/services/baileys.service.js)
+  - ✅ Added missing `phone` parameter to properly identify the recipient conversation
+  - ✅ Updated message key structure to include `remoteJid` (recipient's WhatsApp ID)
+  - ✅ Fixed payload structure to use proper WhatsApp protocol message format for revocation
+  - ✅ Updated [`src/controllers/message.controller.js`](src/controllers/message.controller.js) to pass `formattedPhone` parameter
+  - ✅ Verified validation schema already correctly requires `phone` field for unsend action
+
+- **Technical Implementation Details:**
+  - ✅ Changed `unsendMessage(sessionId, messageId)` to `unsendMessage(sessionId, messageId, phone)`
+  - ✅ Updated message key to include `remoteJid: phone` for proper conversation targeting
+  - ✅ Fixed payload to use `protocolMessage` with `type: 0` (REVOKE) for proper message revocation
+  - ✅ Enhanced logging to include recipient phone number for better debugging
+  - ✅ Maintained backward compatibility with existing validation schema
+
+- **Root Cause Analysis:**
+  - **Problem:** Messages were logging as "unsent successfully" but not actually being revoked in WhatsApp
+  - **Cause:** Missing `remoteJid` in message key and incorrect payload structure
+  - **Solution:** Proper WhatsApp protocol implementation with complete message identification
+
+### Previous Updates (2025-07-18) - LINK MESSAGE FORMAT SIMPLIFICATION
+
+- **Link Message Format Simplification:**
+  - ✅ Simplified link message format to only support `url` and `text` fields
+  - ✅ Removed support for `link` and `caption` field names completely
+  - ✅ Updated validation schema to only accept `url` and `text` for link messages
+  - ✅ Updated send controller to only use `url` and `text` fields
+  - ✅ Updated endpoint.md documentation to show only the supported format
+  - ✅ Eliminated backward compatibility complexity in favor of single format
+
+- **API Consistency Improvements:**
+  - ✅ Standardized link message format across all components
+  - ✅ Removed field name confusion between `link`/`caption` and `url`/`text`
+  - ✅ Simplified validation logic for better maintainability
+  - ✅ Updated response handling to use consistent field names
+
+### Previous Updates (2025-01-17) - MAJOR REFACTORING
 
 - **Complete Architecture Refactoring:**
   - ✅ Eliminated all class-based anti-patterns and mixed architectural styles
@@ -226,7 +265,7 @@
 - **Complete session recovery system implemented and working**
 - **Backend-Worker communication protocol established and tested**
 - **Fixed critical endpoint issue in worker-registry.service.js:**
-  - ✅ Correct endpoint: `/api/v1/workers/${workerId}/sessions/assigned`
+  - ✅ Correct endpoint: `/api/workers/${workerId}/sessions/assigned`
   - ✅ Correct response parsing: `response.data.data.sessions`
   - ✅ Backend successfully returning 1 session, worker now parsing correctly
 - **Session recovery flow fully functional:**
@@ -316,7 +355,16 @@
 
 ## 🔧 Key Technical Improvements
 
-### Architecture Refactoring (NEW)
+### Link Message Format Simplification (NEW)
+
+- **Single Format Support:** Only supports `url` and `text` fields for link messages
+- **Eliminated Complexity:** Removed backward compatibility logic and multiple field name support
+- **Consistent API:** All link messages now use the same field names throughout the system
+- **Simplified Validation:** Cleaner validation schema without alternative field support
+- **Better Maintainability:** Reduced code complexity and potential confusion
+- **Clear Documentation:** Single, well-documented format for link messages
+
+### Architecture Refactoring
 
 - **Clean MVC Pattern:** Proper separation of concerns with controllers, routes, and services
 - **Functional Programming:** Eliminated class-based anti-patterns and global state

@@ -1,5 +1,10 @@
 import Joi from "joi";
-import { MESSAGE_TYPES, VALIDATION, PAGINATION } from "../utils/constants.js";
+import {
+  MESSAGE_TYPES,
+  MESSAGE_ACTIONS,
+  VALIDATION,
+  PAGINATION,
+} from "../utils/constants.js";
 
 // Phone number validation schema
 const phoneNumberSchema = Joi.string()
@@ -92,6 +97,50 @@ const contactSchema = Joi.object({
   }),
 });
 
+// Link validation schema - simplified structure
+const linkUrlSchema = Joi.string().uri().required().messages({
+  "string.uri": "Link URL must be a valid URL",
+  "any.required": "Link URL is required",
+});
+
+const linkCaptionSchema = Joi.string()
+  .max(VALIDATION.MESSAGE.MAX_LENGTH)
+  .optional()
+  .messages({
+    "string.max": `Link caption cannot exceed ${VALIDATION.MESSAGE.MAX_LENGTH} characters`,
+  });
+
+// Poll validation schema - simplified structure
+const pollQuestionSchema = Joi.string().max(255).required().messages({
+  "string.max": "Poll question cannot exceed 255 characters",
+  "any.required": "Poll question is required",
+});
+
+const pollOptionsSchema = Joi.array()
+  .items(Joi.string().max(100))
+  .min(2)
+  .max(12)
+  .required()
+  .messages({
+    "array.min": "Poll must have at least 2 options",
+    "array.max": "Poll cannot have more than 12 options",
+    "string.max": "Poll option cannot exceed 100 characters",
+    "any.required": "Poll options are required",
+  });
+
+const pollMaxAnswerSchema = Joi.number()
+  .integer()
+  .min(1)
+  .max(12)
+  .optional()
+  .default(1)
+  .messages({
+    "number.base": "Max answer must be a number",
+    "number.integer": "Max answer must be an integer",
+    "number.min": "Max answer must be at least 1",
+    "number.max": "Max answer cannot exceed 12",
+  });
+
 // Filename validation schema
 const filenameSchema = Joi.string().max(255).required().messages({
   "string.max": "Filename cannot exceed 255 characters",
@@ -129,7 +178,7 @@ export const sendMessageSchema = Joi.object({
     otherwise: Joi.optional(),
   }),
 
-  // Caption for media messages
+  // Caption for media messages only (not for links)
   caption: Joi.when("type", {
     is: Joi.valid(
       MESSAGE_TYPES.IMAGE,
@@ -154,6 +203,48 @@ export const sendMessageSchema = Joi.object({
     otherwise: Joi.optional(),
   }),
 
+  // Link message fields - only support url and text format
+  url: Joi.when("type", {
+    is: MESSAGE_TYPES.LINK,
+    then: linkUrlSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  text: Joi.when("type", {
+    is: MESSAGE_TYPES.LINK,
+    then: linkCaptionSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  // Poll message fields - simplified structure
+  question: Joi.when("type", {
+    is: MESSAGE_TYPES.POLL,
+    then: pollQuestionSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  options: Joi.when("type", {
+    is: MESSAGE_TYPES.POLL,
+    then: pollOptionsSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  maxAnswer: Joi.when("type", {
+    is: MESSAGE_TYPES.POLL,
+    then: pollMaxAnswerSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  // Message ID for seen receipts
+  messageId: Joi.when("type", {
+    is: MESSAGE_TYPES.SEEN,
+    then: Joi.string().required().messages({
+      "any.required": "Message ID is required for seen receipts",
+      "string.base": "Message ID must be a string",
+    }),
+    otherwise: Joi.optional(),
+  }),
+
   // Human simulation control
   humanSimulation: Joi.boolean().optional().default(true).messages({
     "boolean.base": "humanSimulation must be a boolean value",
@@ -165,39 +256,6 @@ export const sendMessageSchema = Joi.object({
 // Session ID parameter validation schema
 export const sessionIdParamSchema = Joi.object({
   sessionId: sessionIdSchema,
-});
-
-// Message history query validation schema
-export const messageHistoryQuerySchema = Joi.object({
-  contact: phoneNumberSchema.optional(),
-  limit: Joi.number()
-    .integer()
-    .min(1)
-    .max(PAGINATION.MAX_LIMIT)
-    .default(50)
-    .messages({
-      "number.base": "Limit must be a number",
-      "number.integer": "Limit must be an integer",
-      "number.min": "Limit must be at least 1",
-      "number.max": `Limit cannot exceed ${PAGINATION.MAX_LIMIT}`,
-    }),
-  offset: Joi.number().integer().min(0).default(0).messages({
-    "number.base": "Offset must be a number",
-    "number.integer": "Offset must be an integer",
-    "number.min": "Offset must be at least 0",
-  }),
-  startDate: Joi.date().iso().optional().messages({
-    "date.format": "Start date must be in ISO format",
-  }),
-  endDate: Joi.date().iso().optional().messages({
-    "date.format": "End date must be in ISO format",
-  }),
-  type: Joi.string()
-    .valid(...Object.values(MESSAGE_TYPES))
-    .optional()
-    .messages({
-      "any.only": `Message type must be one of: ${Object.values(MESSAGE_TYPES).join(", ")}`,
-    }),
 });
 
 // Message stats query validation schema
@@ -219,6 +277,82 @@ export const sendSeenSchema = Joi.object({
 // Start/Stop typing validation schema
 export const typingSchema = Joi.object({
   to: phoneNumberSchema,
+});
+
+// Message management validation schema
+export const messageManagementSchema = Joi.object({
+  action: Joi.string()
+    .valid(...Object.values(MESSAGE_ACTIONS))
+    .required()
+    .messages({
+      "any.only": `Action must be one of: ${Object.values(MESSAGE_ACTIONS).join(", ")}`,
+      "any.required": "Action is required",
+    }),
+
+  // Phone number - required for all actions (recipient of the message)
+  phone: phoneNumberSchema.messages({
+    "string.pattern.base":
+      "Invalid phone number format. Example: 6285187002626",
+    "any.required": "Phone number is required (recipient of the message)",
+  }),
+
+  // Message ID - required for most actions
+  messageId: Joi.when("action", {
+    is: Joi.valid(
+      MESSAGE_ACTIONS.DELETE,
+      MESSAGE_ACTIONS.UNSEND,
+      MESSAGE_ACTIONS.STAR,
+      MESSAGE_ACTIONS.UNSTAR,
+      MESSAGE_ACTIONS.EDIT,
+      MESSAGE_ACTIONS.REACTION,
+      MESSAGE_ACTIONS.PIN,
+      MESSAGE_ACTIONS.UNPIN
+    ),
+    then: Joi.string().required().messages({
+      "any.required": "Message ID is required for this action",
+      "string.base": "Message ID must be a string",
+    }),
+    otherwise: Joi.optional(),
+  }),
+
+  // Content for edit action
+  content: Joi.when("action", {
+    is: MESSAGE_ACTIONS.EDIT,
+    then: Joi.string()
+      .max(VALIDATION.MESSAGE.MAX_LENGTH)
+      .required()
+      .messages({
+        "string.max": `Content cannot exceed ${VALIDATION.MESSAGE.MAX_LENGTH} characters`,
+        "any.required": "Content is required for edit action",
+      }),
+    otherwise: Joi.optional(),
+  }),
+
+  // Reaction emoji for reaction action
+  emoji: Joi.when("action", {
+    is: MESSAGE_ACTIONS.REACTION,
+    then: Joi.string()
+      .pattern(
+        /^[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]$/u
+      )
+      .required()
+      .messages({
+        "string.pattern.base": "Invalid emoji format",
+        "any.required": "Emoji is required for reaction action",
+      }),
+    otherwise: Joi.optional(),
+  }),
+
+  // For everyone flag for delete action
+  forEveryone: Joi.when("action", {
+    is: MESSAGE_ACTIONS.DELETE,
+    then: Joi.boolean().optional().default(false).messages({
+      "boolean.base": "forEveryone must be a boolean value",
+    }),
+    otherwise: Joi.optional(),
+  }),
+}).messages({
+  "object.unknown": "Unknown field: {#label}",
 });
 
 // Validation middleware functions
@@ -249,36 +383,6 @@ export const validateSendMessage = (req, res, next) => {
 
   req.params = paramsValidation.value;
   req.body = bodyValidation.value;
-  next();
-};
-
-export const validateMessageHistory = (req, res, next) => {
-  const paramsValidation = sessionIdParamSchema.validate(req.params);
-  if (paramsValidation.error) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation error",
-      details: paramsValidation.error.details.map((detail) => ({
-        field: detail.path.join("."),
-        message: detail.message,
-      })),
-    });
-  }
-
-  const queryValidation = messageHistoryQuerySchema.validate(req.query);
-  if (queryValidation.error) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation error",
-      details: queryValidation.error.details.map((detail) => ({
-        field: detail.path.join("."),
-        message: detail.message,
-      })),
-    });
-  }
-
-  req.params = paramsValidation.value;
-  req.query = queryValidation.value;
   next();
 };
 
@@ -399,5 +503,35 @@ export const validateMessageStats = (req, res, next) => {
 
   req.params = paramsValidation.value;
   req.query = queryValidation.value;
+  next();
+};
+
+export const validateMessageManagement = (req, res, next) => {
+  const paramsValidation = sessionIdParamSchema.validate(req.params);
+  if (paramsValidation.error) {
+    return res.status(400).json({
+      success: false,
+      error: "Validation error",
+      details: paramsValidation.error.details.map((detail) => ({
+        field: detail.path.join("."),
+        message: detail.message,
+      })),
+    });
+  }
+
+  const bodyValidation = messageManagementSchema.validate(req.body);
+  if (bodyValidation.error) {
+    return res.status(400).json({
+      success: false,
+      error: "Validation error",
+      details: bodyValidation.error.details.map((detail) => ({
+        field: detail.path.join("."),
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.params = paramsValidation.value;
+  req.body = bodyValidation.value;
   next();
 };

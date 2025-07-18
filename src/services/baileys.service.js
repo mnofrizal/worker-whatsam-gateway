@@ -98,7 +98,7 @@ const handleConnectionUpdate = async (sessionId, update) => {
         logger.info(`Sending QR webhook to backend (max attempts reached):`, {
           sessionId,
           event: "session_auto_disconnected",
-          endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+          endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/webhooks/session-status`,
           payload: JSON.stringify(maxAttemptsPayload, null, 2),
           qrLength: qr.length,
           qrPreview: qr.substring(0, 50) + "...",
@@ -146,7 +146,7 @@ const handleConnectionUpdate = async (sessionId, update) => {
         logger.info(`Sending QR webhook to backend (QR ready):`, {
           sessionId,
           event: "qr_ready",
-          endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+          endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/webhooks/session-status`,
           payload: JSON.stringify(qrReadyPayload, null, 2),
           qrLength: qr.length,
           qrPreview: qr.substring(0, 50) + "...",
@@ -210,7 +210,7 @@ const handleConnectionUpdate = async (sessionId, update) => {
           {
             sessionId,
             event: "session_logged_out",
-            endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+            endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/webhooks/session-status`,
             reason: "logged_out_from_phone",
             phoneNumber: phoneNumber || "N/A",
             displayName: displayName || "N/A",
@@ -416,7 +416,7 @@ const handleRecoveredConnectionUpdate = async (sessionId, update) => {
           {
             sessionId,
             event: "session_logged_out",
-            endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/v1/webhooks/session-status`,
+            endpoint: `${workerRegistryService?.backendUrl || "NOT_SET"}/api/webhooks/session-status`,
             reason: "logged_out_from_phone",
             phoneNumber: phoneNumber || "N/A",
             displayName: displayName || "N/A",
@@ -824,6 +824,485 @@ const stopTyping = async (sessionId, to) => {
   } catch (error) {
     logger.error(`Failed to stop typing indicator from ${sessionId}:`, error);
     throw new Error(`Failed to stop typing indicator: ${error.message}`);
+  }
+};
+
+// Message management methods
+const deleteMessage = async (
+  sessionId,
+  messageId,
+  phone,
+  forEveryone = false
+) => {
+  const socket = sessions.get(sessionId);
+  if (!socket) {
+    throw new Error(`Session ${sessionId} not found or not connected`);
+  }
+  if (!socket.user) {
+    throw new Error(`Session ${sessionId} is not authenticated`);
+  }
+
+  try {
+    const deleteType = forEveryone ? "for everyone" : "for me";
+    logger.info(
+      `Deleting message ${messageId} from session ${sessionId} to ${phone} (${deleteType})`
+    );
+
+    // Create proper message key for deletion with remoteJid
+    const messageKey = {
+      id: messageId,
+      remoteJid: phone,
+      fromMe: true, // Only can delete own messages
+    };
+
+    if (forEveryone) {
+      // For "delete for everyone", use the unsend functionality (revoke message)
+      logger.info(
+        `Deleting message ${messageId} for everyone from ${sessionId} to ${phone} - calling unsendMessage`
+      );
+
+      // Call the unsendMessage function which uses the correct Baileys API
+      const unsendResult = await unsendMessage(sessionId, messageId, phone);
+
+      logger.info(
+        `Message ${messageId} deleted for everyone from ${sessionId} to ${phone}`
+      );
+    } else {
+      // For "delete for me", use simple delete
+      const deletePayload = { delete: messageKey };
+
+      await socket.sendMessage(phone, deletePayload);
+
+      logger.info(
+        `Message ${messageId} deleted for me from ${sessionId} to ${phone}`
+      );
+    }
+
+    return {
+      success: true,
+      messageId,
+      phone,
+      status: forEveryone ? "deleted_for_everyone" : "deleted_for_me",
+      forEveryone,
+    };
+  } catch (error) {
+    logger.error(
+      `Failed to delete message ${messageId} from ${sessionId} to ${phone}:`,
+      error
+    );
+    throw new Error(`Failed to delete message: ${error.message}`);
+  }
+};
+
+const unsendMessage = async (sessionId, messageId, phone) => {
+  const socket = sessions.get(sessionId);
+  if (!socket) {
+    throw new Error(`Session ${sessionId} not found or not connected`);
+  }
+  if (!socket.user) {
+    throw new Error(`Session ${sessionId} is not authenticated`);
+  }
+
+  try {
+    logger.info(
+      `Unsending message ${messageId} from session ${sessionId} to ${phone}`
+    );
+
+    // Create proper message key for unsending (revoke) - must include remoteJid
+    const messageKey = {
+      id: messageId,
+      remoteJid: phone,
+      fromMe: true, // Only can unsend own messages
+    };
+
+    // Use Baileys' simple delete message API (as per documentation)
+    await socket.sendMessage(phone, { delete: messageKey });
+
+    logger.info(
+      `Message ${messageId} unsent successfully from ${sessionId} to ${phone}`
+    );
+
+    return {
+      success: true,
+      messageId,
+      phone,
+      status: "unsent",
+    };
+  } catch (error) {
+    logger.error(
+      `Failed to unsend message ${messageId} from ${sessionId} to ${phone}:`,
+      error
+    );
+    throw new Error(`Failed to unsend message: ${error.message}`);
+  }
+};
+
+const starMessage = async (sessionId, messageId, phone, starred = true) => {
+  const socket = sessions.get(sessionId);
+  if (!socket) {
+    throw new Error(`Session ${sessionId} not found or not connected`);
+  }
+  if (!socket.user) {
+    throw new Error(`Session ${sessionId} is not authenticated`);
+  }
+
+  try {
+    const action = starred ? "starring" : "unstarring";
+    logger.info(
+      `${action} message ${messageId} from session ${sessionId} to ${phone}`
+    );
+
+    // First try: assume it's our own message (fromMe: true)
+    try {
+      // Use Baileys chatModify API for star/unstar as per documentation
+      // await sock.chatModify({ star: { messages: [{ id: 'messageID', fromMe: true }], star: true } }, jid)
+      await socket.chatModify(
+        {
+          star: {
+            messages: [
+              {
+                id: messageId,
+                fromMe: true, // First try with fromMe: true
+              },
+            ],
+            star: starred, // true: Star Message; false: Unstar Message
+          },
+        },
+        phone
+      );
+
+      logger.info(
+        `Message ${messageId} ${starred ? "starred" : "unstarred"} successfully from ${sessionId} to ${phone} (fromMe: true)`
+      );
+
+      return {
+        success: true,
+        messageId,
+        phone,
+        status: starred ? "starred" : "unstarred",
+        starred,
+        fromMe: true,
+      };
+    } catch (firstError) {
+      logger.warn(
+        `Failed to ${action} with fromMe: true, trying fromMe: false:`,
+        firstError.message
+      );
+
+      // Second try: assume it's a message from the other person (fromMe: false)
+      await socket.chatModify(
+        {
+          star: {
+            messages: [
+              {
+                id: messageId,
+                fromMe: false, // Second try with fromMe: false
+              },
+            ],
+            star: starred, // true: Star Message; false: Unstar Message
+          },
+        },
+        phone
+      );
+
+      logger.info(
+        `Message ${messageId} ${starred ? "starred" : "unstarred"} successfully from ${sessionId} to ${phone} (fromMe: false)`
+      );
+
+      return {
+        success: true,
+        messageId,
+        phone,
+        status: starred ? "starred" : "unstarred",
+        starred,
+        fromMe: false,
+      };
+    }
+  } catch (error) {
+    logger.error(
+      `Failed to ${starred ? "star" : "unstar"} message ${messageId} from ${sessionId} to ${phone}:`,
+      error
+    );
+    throw new Error(
+      `Failed to ${starred ? "star" : "unstar"} message: ${error.message}`
+    );
+  }
+};
+
+const editMessage = async (sessionId, messageId, phone, content) => {
+  const socket = sessions.get(sessionId);
+  if (!socket) {
+    throw new Error(`Session ${sessionId} not found or not connected`);
+  }
+  if (!socket.user) {
+    throw new Error(`Session ${sessionId} is not authenticated`);
+  }
+
+  try {
+    logger.info(
+      `Editing message ${messageId} from session ${sessionId} to ${phone} with new content: ${content}`
+    );
+
+    // Create message key for editing (must include remoteJid for proper targeting)
+    const messageKey = {
+      id: messageId,
+      remoteJid: phone, // Target the conversation where the message was sent
+      fromMe: true, // Only can edit own messages
+    };
+
+    // Edit the message using Baileys documentation format
+    // await sock.sendMessage(jid, { text: 'updated text goes here', edit: response.key });
+    await socket.sendMessage(phone, {
+      text: content,
+      edit: messageKey,
+    });
+
+    logger.info(
+      `Message ${messageId} edited successfully from ${sessionId} to ${phone}`
+    );
+
+    return {
+      success: true,
+      messageId,
+      phone,
+      status: "edited",
+      content,
+    };
+  } catch (error) {
+    logger.error(
+      `Failed to edit message ${messageId} from ${sessionId} to ${phone}:`,
+      error
+    );
+    throw new Error(`Failed to edit message: ${error.message}`);
+  }
+};
+
+const sendReaction = async (sessionId, messageId, phone, emoji) => {
+  const socket = sessions.get(sessionId);
+  if (!socket) {
+    throw new Error(`Session ${sessionId} not found or not connected`);
+  }
+  if (!socket.user) {
+    throw new Error(`Session ${sessionId} is not authenticated`);
+  }
+
+  try {
+    logger.info(
+      `Sending reaction ${emoji} to message ${messageId} from session ${sessionId} to ${phone}`
+    );
+
+    // According to Baileys docs, we need to use the original message.key
+    // Since we don't have access to the original message object here,
+    // we'll try both fromMe scenarios to find the correct message
+
+    // First try: assume it's our own message (fromMe: true)
+    let messageKey = {
+      id: messageId,
+      remoteJid: phone,
+      fromMe: true,
+    };
+
+    try {
+      // Send reaction using Baileys documentation format
+      // await sock.sendMessage(jid, { react: { text: '💖', key: message.key } })
+      await socket.sendMessage(phone, {
+        react: {
+          text: emoji, // use an empty string to remove the reaction
+          key: messageKey,
+        },
+      });
+
+      logger.info(
+        `Reaction ${emoji} sent successfully to message ${messageId} from ${sessionId} to ${phone} (fromMe: true)`
+      );
+
+      return {
+        success: true,
+        messageId,
+        phone,
+        status: "reaction_sent",
+        emoji,
+        fromMe: true,
+      };
+    } catch (firstError) {
+      logger.warn(
+        `Failed to send reaction with fromMe: true, trying fromMe: false:`,
+        firstError.message
+      );
+
+      // Second try: assume it's a message from the other person (fromMe: false)
+      messageKey = {
+        id: messageId,
+        remoteJid: phone,
+        fromMe: false,
+      };
+
+      await socket.sendMessage(phone, {
+        react: {
+          text: emoji,
+          key: messageKey,
+        },
+      });
+
+      logger.info(
+        `Reaction ${emoji} sent successfully to message ${messageId} from ${sessionId} to ${phone} (fromMe: false)`
+      );
+
+      return {
+        success: true,
+        messageId,
+        phone,
+        status: "reaction_sent",
+        emoji,
+        fromMe: false,
+      };
+    }
+  } catch (error) {
+    logger.error(
+      `Failed to send reaction ${emoji} to message ${messageId} from ${sessionId} to ${phone}:`,
+      error
+    );
+    throw new Error(`Failed to send reaction: ${error.message}`);
+  }
+};
+
+const pinMessage = async (sessionId, messageId, phone, pinned = true) => {
+  const socket = sessions.get(sessionId);
+  if (!socket) {
+    throw new Error(`Session ${sessionId} not found or not connected`);
+  }
+  if (!socket.user) {
+    throw new Error(`Session ${sessionId} is not authenticated`);
+  }
+
+  try {
+    const action = pinned ? "pinning" : "unpinning";
+    logger.info(
+      `${action} message ${messageId} from session ${sessionId} to ${phone}`
+    );
+
+    // First try: assume it's our own message (fromMe: true)
+    let messageKey = {
+      id: messageId,
+      remoteJid: phone,
+      fromMe: true,
+    };
+
+    try {
+      if (pinned) {
+        // Pin message using sendMessage with pin object
+        // await sock.sendMessage(jid, { pin: { type: 1, time: 86400, key: message.key } })
+        await socket.sendMessage(phone, {
+          pin: {
+            type: 1, // 1 to pin
+            time: 86400, // 24 hours in seconds (86400)
+            key: messageKey,
+          },
+        });
+
+        logger.info(
+          `Message ${messageId} pinned successfully from ${sessionId} to ${phone} (24h duration, fromMe: true)`
+        );
+
+        return {
+          success: true,
+          messageId,
+          phone,
+          status: "pinned",
+          pinned: true,
+          duration: "24h",
+          durationSeconds: 86400,
+          fromMe: true,
+        };
+      } else {
+        // Unpin message using sendMessage with pin object
+        // await sock.sendMessage(jid, { pin: { type: 0, key: message.key } })
+        await socket.sendMessage(phone, {
+          pin: {
+            type: 0, // 0 to unpin
+            key: messageKey,
+          },
+        });
+
+        logger.info(
+          `Message ${messageId} unpinned successfully from ${sessionId} to ${phone} (fromMe: true)`
+        );
+
+        return {
+          success: true,
+          messageId,
+          phone,
+          status: "unpinned",
+          pinned: false,
+          fromMe: true,
+        };
+      }
+    } catch (firstError) {
+      logger.warn(
+        `Failed to ${action} with fromMe: true, trying fromMe: false:`,
+        firstError.message
+      );
+
+      // Second try: assume it's a message from the other person (fromMe: false)
+      messageKey = {
+        id: messageId,
+        remoteJid: phone,
+        fromMe: false,
+      };
+
+      if (pinned) {
+        await socket.sendMessage(phone, {
+          pin: {
+            type: 1, // 1 to pin
+            time: 86400, // 24 hours in seconds (86400)
+            key: messageKey,
+          },
+        });
+
+        logger.info(
+          `Message ${messageId} pinned successfully from ${sessionId} to ${phone} (24h duration, fromMe: false)`
+        );
+
+        return {
+          success: true,
+          messageId,
+          phone,
+          status: "pinned",
+          pinned: true,
+          duration: "24h",
+          durationSeconds: 86400,
+          fromMe: false,
+        };
+      } else {
+        await socket.sendMessage(phone, {
+          pin: {
+            type: 0, // 0 to unpin
+            key: messageKey,
+          },
+        });
+
+        logger.info(
+          `Message ${messageId} unpinned successfully from ${sessionId} to ${phone} (fromMe: false)`
+        );
+
+        return {
+          success: true,
+          messageId,
+          phone,
+          status: "unpinned",
+          pinned: false,
+          fromMe: false,
+        };
+      }
+    }
+  } catch (error) {
+    logger.error(
+      `Failed to ${pinned ? "pin" : "unpin"} message ${messageId} from ${sessionId} to ${phone}:`,
+      error
+    );
+    throw new Error(
+      `Failed to ${pinned ? "pin" : "unpin"} message: ${error.message}`
+    );
   }
 };
 
@@ -1481,6 +1960,12 @@ export default {
   sendSeen,
   startTyping,
   stopTyping,
+  deleteMessage,
+  unsendMessage,
+  starMessage,
+  editMessage,
+  sendReaction,
+  pinMessage,
   getSessionStatus,
   getAllSessions,
   getSessionCount,

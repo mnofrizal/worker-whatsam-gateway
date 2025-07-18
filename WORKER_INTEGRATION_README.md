@@ -214,7 +214,7 @@ GET /session/{sessionId}/messages?limit=50&offset=0
 
 ```javascript
 // Worker calls Backend on startup
-POST http://backend-url/api/v1/workers/register
+POST http://backend-url/api/workers/register
 Authorization: Bearer {WORKER_AUTH_TOKEN}
 Content-Type: application/json
 
@@ -230,7 +230,7 @@ Content-Type: application/json
 
 ```javascript
 // Worker sends health metrics to Backend
-PUT http://backend-url/api/v1/workers/worker-001/heartbeat
+PUT http://backend-url/api/workers/worker-001/heartbeat
 Authorization: Bearer {WORKER_AUTH_TOKEN}
 Content-Type: application/json
 
@@ -408,7 +408,7 @@ async function startWorker() {
 
 async function registerWithBackend() {
   const response = await axios.post(
-    `${process.env.BACKEND_URL}/api/v1/workers/register`,
+    `${process.env.BACKEND_URL}/api/workers/register`,
     {
       workerId: process.env.WORKER_ID,
       endpoint: `http://localhost:${process.env.WORKER_PORT}`,
@@ -438,7 +438,7 @@ async function sendHeartbeat() {
     };
 
     await axios.put(
-      `${process.env.BACKEND_URL}/api/v1/workers/${process.env.WORKER_ID}/heartbeat`,
+      `${process.env.BACKEND_URL}/api/workers/${process.env.WORKER_ID}/heartbeat`,
       metrics,
       {
         headers: {
@@ -583,14 +583,14 @@ class SessionManager {
 #### Get All Workers
 
 ```http
-GET /api/v1/workers
+GET /api/workers
 Authorization: Bearer {JWT_TOKEN}
 ```
 
 #### Add Worker Manually
 
 ```http
-POST /api/v1/workers
+POST /api/workers
 Authorization: Bearer {JWT_TOKEN}
 Content-Type: application/json
 
@@ -604,21 +604,21 @@ Content-Type: application/json
 #### Remove Worker
 
 ```http
-DELETE /api/v1/workers/{workerId}
+DELETE /api/workers/{workerId}
 Authorization: Bearer {JWT_TOKEN}
 ```
 
 #### Get Worker Statistics
 
 ```http
-GET /api/v1/workers/statistics
+GET /api/workers/statistics
 Authorization: Bearer {JWT_TOKEN}
 ```
 
 #### Test Worker Connectivity
 
 ```http
-POST /api/v1/workers/test
+POST /api/workers/test
 Authorization: Bearer {JWT_TOKEN}
 Content-Type: application/json
 
@@ -632,21 +632,21 @@ Content-Type: application/json
 #### Start Health Monitoring
 
 ```http
-POST /api/v1/workers/health/start
+POST /api/workers/health/start
 Authorization: Bearer {JWT_TOKEN}
 ```
 
 #### Stop Health Monitoring
 
 ```http
-POST /api/v1/workers/health/stop
+POST /api/workers/health/stop
 Authorization: Bearer {JWT_TOKEN}
 ```
 
 #### Get Health Status
 
 ```http
-GET /api/v1/workers/health/status
+GET /api/workers/health/status
 Authorization: Bearer {JWT_TOKEN}
 ```
 
@@ -835,13 +835,13 @@ curl -X POST http://localhost:8001/session/test-session/send \
 
 ```bash
 # Test worker registration
-curl -X POST http://localhost:8000/api/v1/workers/register \
+curl -X POST http://localhost:8000/api/workers/register \
   -H "Authorization: Bearer your-worker-token" \
   -H "Content-Type: application/json" \
   -d '{"workerId":"worker-001","endpoint":"http://localhost:8001","maxSessions":50}'
 
 # Test admin worker list
-curl http://localhost:8000/api/v1/workers \
+curl http://localhost:8000/api/workers \
   -H "Authorization: Bearer your-jwt-token"
 ```
 

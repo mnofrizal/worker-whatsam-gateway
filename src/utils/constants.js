@@ -131,6 +131,27 @@ export const MESSAGE_TYPES = {
   STICKER: "sticker",
   LOCATION: "location",
   CONTACT: "contact",
+  LINK: "link",
+  POLL: "poll",
+  SEEN: "seen",
+  TYPING_START: "typing_start",
+  TYPING_STOP: "typing_stop",
+};
+
+/**
+ * Message Management Actions
+ * Available actions for message management operations
+ */
+export const MESSAGE_ACTIONS = {
+  DELETE: "delete",
+  UNSEND: "unsend",
+  STAR: "star",
+  UNSTAR: "unstar",
+  EDIT: "edit",
+  REACTION: "reaction",
+  READ: "read",
+  PIN: "pin",
+  UNPIN: "unpin",
 };
 
 /**
@@ -382,6 +403,7 @@ export default {
   ERROR_CODES,
   SESSION_STATUS,
   MESSAGE_TYPES,
+  MESSAGE_ACTIONS,
   MESSAGE_STATUS,
   WORKER_STATUS,
   FILE_UPLOAD,

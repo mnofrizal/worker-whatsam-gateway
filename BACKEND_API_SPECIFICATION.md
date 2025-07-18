@@ -8,7 +8,7 @@ This document specifies the exact API endpoints that your backend needs to imple
 
 ### 1. Worker Registration
 
-**Endpoint:** `POST /api/v1/workers/register`
+**Endpoint:** `POST /api/workers/register`
 
 **Headers:**
 
@@ -61,7 +61,7 @@ Authorization: Bearer worker-secret-token-12345
 
 ### 2. Worker Heartbeat
 
-**Endpoint:** `PUT /api/v1/workers/{workerId}/heartbeat`
+**Endpoint:** `PUT /api/workers/{workerId}/heartbeat`
 
 **Headers:**
 
@@ -106,12 +106,12 @@ Authorization: Bearer worker-secret-token-12345
 
 ### 3. Worker Events/Notifications
 
-**Endpoint:** `POST /api/v1/workers/{workerId}/events`
+**Endpoint:** `POST /api/workers/{workerId}/events`
 
 **Note:** For session status updates, the worker will use webhook endpoints:
 
-- `POST /api/v1/webhooks/session-status` (for QR codes, connection status)
-- `POST /api/v1/webhooks/message-status` (for message delivery status)
+- `POST /api/webhooks/session-status` (for QR codes, connection status)
+- `POST /api/webhooks/message-status` (for message delivery status)
 
 **Headers:**
 
@@ -147,7 +147,7 @@ Authorization: Bearer worker-secret-token-12345
 
 ### 4. Worker Unregistration
 
-**Endpoint:** `DELETE /api/v1/workers/{workerId}`
+**Endpoint:** `DELETE /api/workers/{workerId}`
 
 **Headers:**
 
@@ -166,7 +166,7 @@ Authorization: Bearer worker-secret-token-12345
 
 ### 5. Session Status Webhook
 
-**Endpoint:** `POST /api/v1/webhooks/session-status`
+**Endpoint:** `POST /api/webhooks/session-status`
 
 **Headers:**
 
@@ -202,7 +202,7 @@ Authorization: Bearer worker-secret-token-12345
 
 ### 6. Message Status Webhook
 
-**Endpoint:** `POST /api/v1/webhooks/message-status`
+**Endpoint:** `POST /api/webhooks/message-status`
 
 **Headers:**
 
@@ -336,16 +336,16 @@ Error response format:
 ## Implementation Priority
 
 1. **High Priority (Required for worker to start):**
-   - `POST /api/v1/workers/register`
-   - `PUT /api/v1/workers/{workerId}/heartbeat`
+   - `POST /api/workers/register`
+   - `PUT /api/workers/{workerId}/heartbeat`
 
 2. **Medium Priority (Required for session management):**
-   - `POST /api/v1/workers/{workerId}/events`
-   - `POST /api/v1/webhooks/session-status`
-   - `POST /api/v1/webhooks/message-status`
+   - `POST /api/workers/{workerId}/events`
+   - `POST /api/webhooks/session-status`
+   - `POST /api/webhooks/message-status`
 
 3. **Low Priority (Graceful shutdown):**
-   - `DELETE /api/v1/workers/{workerId}`
+   - `DELETE /api/workers/{workerId}`
 
 ## Testing the Integration
 
