@@ -23,7 +23,10 @@ const sendMessage = async (req, res) => {
       caption,
       filename,
       location,
-      contact,
+      contactName,
+      contactPhone,
+      contactEmail,
+      contactOrganization,
       url,
       text,
       question,
@@ -148,24 +151,20 @@ const sendMessage = async (req, res) => {
         break;
 
       case "contact":
-        result = await baileysService.sendMessage(
+        const contactData = {
+          contactName,
+          contactPhone,
+          contactEmail,
+          contactOrganization,
+        };
+        result = await baileysService.sendContact(
           sessionId,
           formattedTo,
-          {
-            contacts: {
-              displayName: contact.name,
-              contacts: [
-                {
-                  displayName: contact.name,
-                  vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:${contact.name}\nTEL:${contact.phone}${contact.email ? `\nEMAIL:${contact.email}` : ""}${contact.organization ? `\nORG:${contact.organization}` : ""}\nEND:VCARD`,
-                },
-              ],
-            },
-          },
+          contactData,
           sendOptions
         );
-        messageContent = `Contact: ${contact.name}`;
-        messageData = { contact };
+        messageContent = `Contact: ${contactName}`;
+        messageData = contactData;
         break;
 
       case "seen":
@@ -293,7 +292,11 @@ const sendMessage = async (req, res) => {
         responseData.location = location;
         break;
       case "contact":
-        responseData.contact = contact;
+        responseData.contactName = contactName;
+        responseData.contactPhone = contactPhone;
+        if (contactEmail) responseData.contactEmail = contactEmail;
+        if (contactOrganization)
+          responseData.contactOrganization = contactOrganization;
         break;
       case "link":
         responseData.url = url;

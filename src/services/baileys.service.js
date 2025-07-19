@@ -827,6 +827,41 @@ const stopTyping = async (sessionId, to) => {
   }
 };
 
+const sendContact = async (
+  sessionId,
+  to,
+  { contactName, contactPhone, contactEmail, contactOrganization },
+  options = {}
+) => {
+  try {
+    const vCard =
+      `BEGIN:VCARD\n` +
+      `VERSION:3.0\n` +
+      `FN:${contactName}\n` +
+      (contactOrganization ? `ORG:${contactOrganization};\n` : "") +
+      `TEL;type=CELL;type=VOICE;waid=${contactPhone}:${contactPhone}\n` +
+      (contactEmail ? `EMAIL:${contactEmail}\n` : "") +
+      `END:VCARD`;
+
+    const contactMessage = {
+      contacts: {
+        displayName: contactName,
+        contacts: [{ vcard: vCard }],
+      },
+    };
+
+    logger.info(`Sending contact message from ${sessionId} to ${to}`, {
+      contactName,
+      contactPhone,
+    });
+
+    return await sendMessage(sessionId, to, contactMessage, options);
+  } catch (error) {
+    logger.error(`Failed to send contact message from ${sessionId}:`, error);
+    throw new Error(`Failed to send contact message: ${error.message}`);
+  }
+};
+
 // Message management methods
 const deleteMessage = async (
   sessionId,
@@ -1941,6 +1976,107 @@ const preserveSessionsForShutdown = async () => {
   }
 };
 
+const getUserInfo = async (sessionId) => {
+  const socket = sessions.get(sessionId);
+  if (!socket) {
+    throw new Error(`Session ${sessionId} not found or not connected`);
+  }
+  if (!socket.user) {
+    throw new Error(`Session ${sessionId} is not authenticated`);
+  }
+
+  try {
+    logger.info(`Getting user info for session ${sessionId}`);
+
+    // Get basic user information from socket
+    const phoneNumber = socket.user.id; // WhatsApp JID (e.g., "6281234567890@s.whatsapp.net")
+    const displayName = socket.user.name || socket.user.notify || null;
+
+    // Get session status information
+    const sessionInfo = sessionStatus.get(sessionId);
+    const connectedAt = sessionInfo?.connectedAt || null;
+    const lastSeen = sessionInfo?.lastSeen || new Date().toISOString();
+    const status = sessionInfo?.status || "unknown";
+
+    // Initialize user info object
+    const userInfo = {
+      phoneNumber,
+      displayName,
+      profilePicture: null,
+      statusMessage: null,
+      businessProfile: null,
+      sessionStatus: status,
+      connectedAt,
+      lastSeen,
+    };
+
+    // Try to get profile picture URL
+    try {
+      const profilePictureUrl = await socket.profilePictureUrl(
+        phoneNumber,
+        "image"
+      );
+      userInfo.profilePicture = profilePictureUrl;
+      logger.debug(`Profile picture URL retrieved for ${sessionId}`);
+    } catch (error) {
+      logger.debug(
+        `Profile picture not available for ${sessionId}: ${error.message}`
+      );
+      // Profile picture might be private or not set, this is normal
+    }
+
+    // Try to get status message (about)
+    try {
+      const statusResponse = await socket.fetchStatus(phoneNumber);
+      if (statusResponse && statusResponse.status) {
+        userInfo.statusMessage = statusResponse.status;
+        logger.debug(`Status message retrieved for ${sessionId}`);
+      }
+    } catch (error) {
+      logger.debug(
+        `Status message not available for ${sessionId}: ${error.message}`
+      );
+      // Status might be private or not set, this is normal
+    }
+
+    // Try to get business profile information
+    try {
+      const businessProfile = await socket.getBusinessProfile(phoneNumber);
+      if (businessProfile) {
+        userInfo.businessProfile = {
+          businessId: businessProfile.business_id || null,
+          businessName: businessProfile.business_name || null,
+          businessCategory: businessProfile.business_category || null,
+          businessDescription: businessProfile.business_description || null,
+          businessEmail: businessProfile.business_email || null,
+          businessWebsite: businessProfile.business_website || null,
+          businessAddress: businessProfile.business_address || null,
+        };
+        logger.debug(`Business profile retrieved for ${sessionId}`);
+      }
+    } catch (error) {
+      logger.debug(
+        `Business profile not available for ${sessionId}: ${error.message}`
+      );
+      // Not a business account or business profile is private, this is normal
+    }
+
+    logger.info(`User info retrieved successfully for session ${sessionId}`, {
+      phoneNumber,
+      displayName,
+      hasProfilePicture: !!userInfo.profilePicture,
+      hasStatusMessage: !!userInfo.statusMessage,
+      hasBusinessProfile: !!userInfo.businessProfile,
+      sessionStatus: status,
+    });
+
+    return userInfo;
+  } catch (error) {
+    logger.error(`Failed to get user info for session ${sessionId}:`, error);
+    throw new Error(`Failed to get user info: ${error.message}`);
+  }
+};
+
 const shutdown = async () => {
   try {
     logger.info("Shutting down Baileys service...");
@@ -1957,6 +2093,7 @@ export default {
   initialize,
   createSession,
   sendMessage,
+  sendContact,
   sendSeen,
   startTyping,
   stopTyping,
@@ -1976,5 +2113,6 @@ export default {
   disconnectSession,
   logoutSession,
   loadPersistedSessions,
+  getUserInfo,
   shutdown,
 };

@@ -82,19 +82,22 @@ const locationSchema = Joi.object({
   }),
 });
 
-// Contact validation schema
-const contactSchema = Joi.object({
-  name: Joi.string().max(100).required().messages({
-    "string.max": "Contact name cannot exceed 100 characters",
-    "any.required": "Contact name is required",
-  }),
-  phone: phoneNumberSchema,
-  email: Joi.string().email().optional().messages({
-    "string.email": "Contact email must be a valid email address",
-  }),
-  organization: Joi.string().max(100).optional().messages({
-    "string.max": "Contact organization cannot exceed 100 characters",
-  }),
+// Contact validation schemas for individual fields
+const contactNameSchema = Joi.string().max(100).required().messages({
+  "string.max": "Contact name cannot exceed 100 characters",
+  "any.required": "contactName is required",
+});
+
+const contactPhoneSchema = Joi.string().required().messages({
+  "any.required": "contactPhone is required",
+});
+
+const contactEmailSchema = Joi.string().email().optional().messages({
+  "string.email": "Contact email must be a valid email address",
+});
+
+const contactOrganizationSchema = Joi.string().max(100).optional().messages({
+  "string.max": "Contact organization cannot exceed 100 characters",
 });
 
 // Link validation schema - simplified structure
@@ -197,9 +200,28 @@ export const sendMessageSchema = Joi.object({
   }),
 
   // Contact message fields
-  contact: Joi.when("type", {
+  // Contact message fields (flattened)
+  contactName: Joi.when("type", {
     is: MESSAGE_TYPES.CONTACT,
-    then: contactSchema.required(),
+    then: contactNameSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  contactPhone: Joi.when("type", {
+    is: MESSAGE_TYPES.CONTACT,
+    then: contactPhoneSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  contactEmail: Joi.when("type", {
+    is: MESSAGE_TYPES.CONTACT,
+    then: contactEmailSchema,
+    otherwise: Joi.optional(),
+  }),
+
+  contactOrganization: Joi.when("type", {
+    is: MESSAGE_TYPES.CONTACT,
+    then: contactOrganizationSchema,
     otherwise: Joi.optional(),
   }),
 
@@ -520,6 +542,47 @@ export const validateMessageManagement = (req, res, next) => {
   }
 
   const bodyValidation = messageManagementSchema.validate(req.body);
+  if (bodyValidation.error) {
+    return res.status(400).json({
+      success: false,
+      error: "Validation error",
+      details: bodyValidation.error.details.map((detail) => ({
+        field: detail.path.join("."),
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.params = paramsValidation.value;
+  req.body = bodyValidation.value;
+  next();
+};
+
+// User management validation schema
+export const userManagementSchema = Joi.object({
+  type: Joi.string().valid("info").required().messages({
+    "any.only": "Type must be one of: info",
+    "any.required": "Type is required",
+  }),
+}).messages({
+  "object.unknown": "Unknown field: {#label}",
+});
+
+// User management validation middleware
+export const validateUserManagement = (req, res, next) => {
+  const paramsValidation = sessionIdParamSchema.validate(req.params);
+  if (paramsValidation.error) {
+    return res.status(400).json({
+      success: false,
+      error: "Validation error",
+      details: paramsValidation.error.details.map((detail) => ({
+        field: detail.path.join("."),
+        message: detail.message,
+      })),
+    });
+  }
+
+  const bodyValidation = userManagementSchema.validate(req.body);
   if (bodyValidation.error) {
     return res.status(400).json({
       success: false,

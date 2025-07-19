@@ -19,6 +19,10 @@
 13. GET /ready --> Kubernetes readiness probe endpoint
 14. GET /live --> Kubernetes liveness probe endpoint
 15. GET /health/services --> Status of all connected services (database, redis, storage, etc.)
+16. POST /api/user/{sessionId}/manage --> Unified user management endpoint supporting:
+
+- Type: "info" - Get WhatsApp user information (name, phone, profile picture, status message)
+- Future types can be added for other user management operations
 
 ## Message Type Examples (for /api/{sessionId}/send)
 
@@ -28,7 +32,7 @@
 - **Video Message**: `{"to": "6281234567890", "type": "video", "mediaUrl": "https://example.com/video.mp4", "caption": "Video"}`
 - **Audio Message**: `{"to": "6281234567890", "type": "audio", "mediaUrl": "https://example.com/audio.mp3"}`
 - **Location Message**: `{"to": "6281234567890", "type": "location", "location": {"latitude": -6.2, "longitude": 106.8, "name": "Jakarta", "address": "Jakarta, Indonesia"}}`
-- **Contact Message**: `{"to": "6281234567890", "type": "contact", "contact": {"name": "John Doe", "phone": "6281234567890", "email": "john@example.com", "organization": "Company"}}`
+- **Contact Message**: `{"to": "6281234567890", "type": "contact", "contactName": "John Doe", "contactPhone": "+1234567890", "contactEmail": "john@example.com", "contactOrganization": "Example Corp"}`
 - **Link Message**: `{"to": "6281234567890", "type": "link", "url": "https://google.com", "text": "Check this out!"}`
 - **Poll Message**: `{"to": "6281234567890", "type": "poll", "question": "What's your favorite color?", "options": ["Red", "Blue", "Green"], "maxAnswer": 1}`
 - **Read Receipt**: `{"to": "6281234567890", "type": "seen", "messageId": "message_id_here"}`
@@ -124,3 +128,97 @@ const deletePayload = {
 4. The `forEveryone` parameter only applies to the DELETE action
 5. For group chats, use the group JID format: `groupid@g.us`
 6. **FIXED:** Delete messages now actually work in WhatsApp due to proper protocol implementation
+
+## User Management Endpoint
+
+### POST /api/user/{sessionId}/manage
+
+Unified user management endpoint for WhatsApp sessions with type-based operations.
+
+**Get User Information (type: "info"):**
+
+**Request:**
+
+```
+POST /api/user/user123-session1/manage
+Content-Type: application/json
+
+{
+  "type": "info"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "sessionId": "user123-session1",
+    "userInfo": {
+      "phoneNumber": "6281234567890@s.whatsapp.net",
+      "displayName": "John Doe",
+      "profilePicture": "https://pps.whatsapp.net/v/t61.24694-24/...",
+      "statusMessage": "Hey there! I am using WhatsApp.",
+      "businessProfile": {
+        "businessId": "123456789",
+        "businessName": "John's Store",
+        "businessCategory": "Retail",
+        "businessDescription": "We sell amazing products",
+        "businessEmail": "contact@johnsstore.com",
+        "businessWebsite": "https://johnsstore.com",
+        "businessAddress": "123 Main St, City"
+      }
+    },
+    "sessionStatus": "connected",
+    "connectedAt": "2024-01-15T10:30:00Z",
+    "lastSeen": "2024-01-15T10:35:00Z"
+  }
+}
+```
+
+**Supported Types:**
+
+- `"info"`: Get comprehensive user information
+- Future types can be added for other user management operations
+
+**Fields Explanation:**
+
+- `phoneNumber`: WhatsApp JID (phone number with @s.whatsapp.net)
+- `displayName`: User's display name in WhatsApp (can be null)
+- `profilePicture`: URL to profile picture (can be null if no picture or privacy settings)
+- `statusMessage`: WhatsApp status/about message (can be null if not set or privacy settings)
+- `businessProfile`: Business account information (null for personal accounts)
+  - `businessId`: Unique business identifier
+  - `businessName`: Business display name
+  - `businessCategory`: Business category
+  - `businessDescription`: Business description
+  - `businessEmail`: Business contact email
+  - `businessWebsite`: Business website URL
+  - `businessAddress`: Business physical address
+- `sessionStatus`: Current session connection status
+- `connectedAt`: When the session was first connected
+- `lastSeen`: Last activity timestamp
+
+**Error Responses:**
+
+```json
+{
+  "success": false,
+  "error": "Session user123-session1 not found or not connected"
+}
+```
+
+```json
+{
+  "success": false,
+  "error": "Unsupported user management type: invalid_type"
+}
+```
+
+**Requirements:**
+
+- Session must be in "connected" status
+- Session must be authenticated with WhatsApp
+- Request body must include valid `type` parameter
+- Some fields may be null due to privacy settings or unavailable data
